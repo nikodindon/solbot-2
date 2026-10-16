@@ -107,6 +107,8 @@ export class GeckoBackfiller {
     if (!g) {throw new Error(`tf non supporté par gecko: ${tf}`);}
     const pool = await this.bestPool(mint);
     if (!pool) {return 0;}
+    // endpoint OHLCV onchain: adresse NUE attendue (pas l'ID "solana_…" de la v2)
+    const poolAddress = pool.replace(/^[a-z0-9]+_/, "");
     const sinceTs = Math.floor(Date.now() / 1000 - days * 86400);
     const stored = countImportedCandles(this.db, mint, tf);
     if (stored > 0) {
@@ -125,7 +127,7 @@ export class GeckoBackfiller {
         currency: "usd",
       });
       if (before !== undefined) {params.set("before_timestamp", String(before));}
-      const url = `${this.baseUrl}/networks/solana/pools/${pool}/ohlcv/${g.unit}?${params.toString()}`;
+      const url = `${this.baseUrl}/networks/solana/pools/${poolAddress}/ohlcv/${g.unit}?${params.toString()}`;
       let rows: number[][] | null = null;
       for (let attempt = 1; attempt <= this.cfg.maxRetries; attempt++) {
         await sleepMs(this.cfg.requestPauseMs);

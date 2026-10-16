@@ -87,7 +87,9 @@ describe("GeckoBackfiller", () => {
     const gecko = new GeckoBackfiller(db, { ...geckoDefaults(), requestPauseMs: 5, apiKey: "CG-demo-fake" }, fetch);
     const n = await gecko.backfillToken(JUP, "15m", 7);
     expect(n).toBe(1);
-    expect(reqs[0]?.url).toContain("https://api.coingecko.com/api/v3/onchain/networks/solana/");
+    expect(reqs[0]?.url).toContain("https://api.coingecko.com/api/v3/onchain/networks/solana/tokens/");
+    expect(reqs[1]?.url).toContain("onchain/networks/solana/pools/C8Gr6AUuq9hEdSYJzoEpNcdjpojPZwqG5MtQbeouNNwg/ohlcv/");
+    expect(reqs[1]?.url).not.toContain("pools/solana_");
     expect(reqs[0]?.headers["x-cg-demo-api-key"]).toBe("CG-demo-fake");
   });
 
