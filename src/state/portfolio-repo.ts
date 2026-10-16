@@ -205,6 +205,14 @@ export function setStops(
   ).run(stopLossPrice, takeProfitPrice, Date.now(), mint);
 }
 
+export function setTrailingStopPrice(db: DB, mint: string, price: number | null): void {
+  db.prepare("UPDATE positions SET trailing_stop_price = ?, updated_ms = ? WHERE mint = ?").run(
+    price,
+    Date.now(),
+    mint,
+  );
+}
+
 export function realizedPnlTotal(db: DB): number {
   const row = db
     .prepare(
