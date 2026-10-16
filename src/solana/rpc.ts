@@ -142,6 +142,11 @@ export class RpcClient {
     return out;
   }
 
+  /** Generic raw jsonrpc call (kept public for simulation helpers). */
+  callRaw<T = unknown>(method: string, params: unknown[]): Promise<T> {
+    return this.call<T>(method, params);
+  }
+
   /** Token account balance for one mint (decoded lookup for quick checks). */
   async tokenBalance(owner: string, mint: string): Promise<TokenAccount | null> {
     const r = await this.call<{

@@ -23,7 +23,7 @@ export interface TradeRecord {
   signature?: string | null;
   realizedPnlUsd?: number | null;
   status:
-    "filled" | "simulated" | "failed" | "simulated_no_rpc" | "failed_order" | "reconciled" | "open";
+    "filled" | "simulated" | "failed" | "simulated_no_rpc" | "failed_order" | "reconciled" | "open" | "validated_order";
   reason?: string | null;
   note?: string | null;
 }
