@@ -161,6 +161,8 @@ export const fundingSchema = z
   })
   .strict();
 
+export type FundingConfig = z.infer<typeof fundingSchema>;
+
 export const backtestSchema = z
   .object({
     initial_usdc: z.number().min(1).max(100_000).default(6),
