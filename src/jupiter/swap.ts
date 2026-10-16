@@ -41,6 +41,9 @@ const tokenSearchSchema = z.array(
     liquidity: z.number().optional(),
     usdPrice: z.number().optional(),
     firstPool: z.object({ id: z.string(), createdAt: z.string().optional() }).nullish(),
+    stats24h: z
+      .object({ buyVolume: z.number().optional(), sellVolume: z.number().optional() })
+      .optional(),
     tags: z.array(z.string()).optional(),
   }),
 );
@@ -94,6 +97,9 @@ export class SwapApi {
         isVerified: t.isVerified === true,
         liquidity: t.liquidity,
         poolCreatedMs,
+        stats24h: t.stats24h
+          ? { buyVolume: t.stats24h.buyVolume ?? 0, sellVolume: t.stats24h.sellVolume ?? 0 }
+          : undefined,
       });
     }
     return out;
@@ -108,6 +114,7 @@ export type TokenInfoParsed = {
   isVerified: boolean;
   liquidity?: number;
   poolCreatedMs: number | null;
+  stats24h?: { buyVolume: number; sellVolume: number };
 };
 
 /** Modeled Jupiter platform fee (bps) for a pair — same schedule vX docs; used pre-trade in the cost model. */
