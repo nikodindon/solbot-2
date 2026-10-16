@@ -1,0 +1,48 @@
+{
+  "name": "solbot2",
+  "version": "2.0.0",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=22.5.0"
+  },
+  "description": "Autonomous Solana spot trading bot (micro-capital, Jupiter, real-time dashboard)",
+  "license": "MIT",
+  "scripts": {
+    "dev": "tsx src/index.ts start",
+    "build": "tsc -p tsconfig.build.json",
+    "start": "tsx src/index.ts start",
+    "setup": "tsx src/index.ts init",
+    "init": "tsx src/index.ts init",
+    "demo": "tsx src/index.ts demo",
+    "doctor": "tsx src/index.ts doctor",
+    "backtest": "tsx src/index.ts backtest",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "lint": "eslint src tests",
+    "format": "prettier --write \"src/**/*.{ts,css}\" \"public/**/*.{js,css,html}\" \"tests/**/*.ts\"",
+    "format:check": "prettier --check \"src/**/*.{ts,css}\" \"public/**/*.{js,css,html}\" \"tests/**/*.ts\""
+  },
+  "dependencies": {
+    "@solana/web3.js": "^1.98.0",
+    "bs58": "^6.0.0",
+    "commander": "^13.1.0",
+    "pino": "^9.6.0",
+    "qrcode": "^1.5.4",
+    "yaml": "^2.7.0",
+    "zod": "^3.24.1"
+  },
+  "devDependencies": {
+    "@eslint/js": "^9.19.0",
+    "@types/node": "^22.12.0",
+    "@types/qrcode": "^1.5.5",
+    "@typescript-eslint/eslint-plugin": "^8.21.0",
+    "@typescript-eslint/parser": "^8.21.0",
+    "eslint": "^9.19.0",
+    "prettier": "^3.4.2",
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.3",
+    "vitest": "^3.0.4"
+  }
+}

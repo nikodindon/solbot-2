@@ -1,0 +1,9 @@
+.env
+data/
+node_modules/
+dist/
+coverage/
+*.log
+STOP
+.DS_Store
+config/config.local.yaml
