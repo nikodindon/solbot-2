@@ -1,0 +1,109 @@
+# config.yaml par défaut — adapté à un capital de test de ~6 $ (~1 $ SOL + ~5 $ USDC).
+# Tout est surchargé par drapeaux CLI et variables d'env (MODE, BS58_PRIVATE_KEY...).
+
+mode: paper                # paper (défaut, aucun ordre réel) | dry_run | live (exige confirm_live: true)
+confirm_live: false        # doit être true pour autoriser le live — jamais en implicit
+loop_interval_s: 30        # période du tick principal
+base_currency: USDC
+
+universe:
+  # max 5 tokens en plus de SOL/USDC — chacun doit être vérifié, liquidité > 1M$, age > 30 j
+  tokens:
+    - { mint: JUPyiwrYJFskUPiHa7hkeR8VUtAeFoSYbKedZNsDvCN, symbol: JUP, decimals: 6 }
+    - { mint: DezXAZ8z7PnrnRJjz3wXBoRgixCa6xjnB7YaB1pPB263, symbol: BONK, decimals: 5 }
+  min_liquidity_usd: 1000000
+  min_age_days: 30
+
+strategies:
+  momentum:
+    enabled: true
+    weight: 1.0
+    params:
+      ema_fast: 9
+      ema_slow: 21
+      rsi_period: 14
+      rsi_entry: 68
+      breakout_lookback: 20
+      volume_lookback: 20
+      volume_mult: 1.5
+      atr_stop_mult: 2.0
+  mean_reversion:
+    enabled: true
+    weight: 1.0
+    params:
+      window: 96
+      z_entry: 2.0
+      z_exit: 0.5
+  dca_rotation:
+    enabled: true
+    weight: 0.7
+    params:
+      target_sol: 0.35      # allocation cible en SOL (le reste tient en USDC)
+      rebalance_bps: 250    # rééquilibre si dérive > 250 bps
+
+risk:                       # micro-capital : chaque dollar compte
+  min_trade_usd: 1.5        # pas de micro-micro trades : les frais fixent un plancher
+  max_trade_usd: 3.0
+  hard_max_trade_usd: 10.0  # plafond codé aussi en dur dans le RiskManager
+  max_positions: 2
+  max_position_pct: 45      # % du NAV max par position
+  daily_loss_limit_pct: 10  # perte du jour -> entrées en pause jusqu'à minuit UTC
+  kill_switch_max_drawdown_pct: 30  # NAV < 70% du capital initial -> kill-switch (plus d'entrées)
+  hard_max_total_loss_pct: 50       # plafond codé aussi en dur dans le RiskManager
+  stop_loss_pct: 6
+  take_profit_pct: 12
+  trailing_activation_pct: 4
+  trailing_retrace_pct: 2.5
+  cooldown_s: 180
+  gas_reserve_sol: 0.005    # ~0,5 $ de SOL jamais vendus : frais de la chaîne
+  priority_fee_sol: 0.00002
+  max_slippage_bps: 300     # garde-fou dur ; en pratique RTSE gère le slippage réel
+  max_price_impact_bps: 100
+  ata_rent_horizon_trades: 20  # amortit la rent (~0,00204 SOL) d'un nouveau compte de token
+
+costs:                      # filtre « edge net de coûts »
+  edge_multiplier: 3        # entrer seulement si edge > 3× coût aller-retour estimé
+  expected_slippage_bps: 15
+  paper_fill_slippage_bps: 10
+
+execution:
+  retries: 2
+  retry_backoff_ms: 750
+  confirm_timeout_s: 60
+
+regime:
+  vol_lookback: 96          # 24 h de barres 15m
+  high_vol_pctl: 95
+  high_vol_floor_bps: 25    # vol par barre (bps) — au-dessus + pctl élevé = haute volatilité
+  idle_vol_bps: 4           # en dessous : marché figé, on ne trade pas
+  trend_atr_ratio: 0.75     # |slope| en ATR sur les lookback barres
+
+dashboard:
+  host: 0.0.0.0
+  port: 4100
+  stale_after_s: 120
+
+shadow:                     # portefeuilles fantômes
+  cash_usd: 30              # caisse virtuelle de chaque fantôme
+  trade_usd: 3              # taille de trade des fantômes
+  max_positions: 4
+  min_samples: 8            # décisions nettes minimales avant éligibilité au pilotage
+  amd_margin_usd: 0.5       # hystérésis : marge nette exigée pour basculer
+
+funding:                    # seuils de financement (mode live / attente de fonds)
+  min_sol_usd: 1
+  min_usdc_usd: 5
+
+backtest:
+  initial_usdc: 6
+  guard_min_days: 14        # couverture historique minimale pour autoriser le live
+  guard_require_positive_net_pnl: false
+
+paper_initial_usdc: 6       # caisse du portefeuille paper (le NAV réel reste visible au dashboard)
+
+demo:
+  seed: 42
+  vol_daily: 0.05
+
+database:
+  path: ./data/solbot2.sqlite
