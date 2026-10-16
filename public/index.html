@@ -1,0 +1,69 @@
+<!doctype html>
+<html lang="fr" data-theme="dark">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>solbot2</title>
+  <link rel="stylesheet" href="/vendor/uPlot.min.css" />
+  <link rel="stylesheet" href="/style.css" />
+</head>
+<body>
+  <header>
+    <h1>solbot2 <span id="mode" class="badge">…</span></h1>
+    <div id="conn" class="badge conn">SSE ⏳</div>
+  </header>
+
+  <main>
+    <section id="kpis" class="kpis">
+      <div class="kpi"><label>NAV</label><strong id="nav">—</strong><small id="nav-delta"></small></div>
+      <div class="kpi"><label>Cash</label><strong id="cash">—</strong></div>
+      <div class="kpi"><label>Positions</label><strong id="pos">—</strong></div>
+      <div class="kpi"><label>Drawdown</label><strong id="dd">—</strong></div>
+      <div class="kpi"><label>PnL réalisé</label><strong id="realized">—</strong></div>
+      <div class="kpi"><label>Swaps restants</label><strong id="swaps">—</strong></div>
+      <div class="kpi"><label>Alloc. stratégie</label><strong id="alloc">—</strong></div>
+      <div class="kpi"><label>B&H SOL</label><strong id="bh">—</strong></div>
+    </section>
+
+    <section class="grid">
+      <div class="card span-2">
+        <h2>Equity (NAV vs cash vs B&H SOL)</h2>
+        <div id="chart" class="chart"></div>
+      </div>
+      <div class="card">
+        <h2>Côuts réels payés</h2>
+        <table id="costs"><tbody></tbody></table>
+        <h2>Garde-fous</h2>
+        <table id="guards"><tbody></tbody></table>
+      </div>
+
+      <div class="card">
+        <h2>Positions ouvertes</h2>
+        <table id="positions"><thead><tr><th>Actif</th><th>Qté</th><th>Entrée</th><th>Valeur</th><th>PnL</th><th>Stops</th><th>Âge</th></tr></thead><tbody></tbody></table>
+      </div>
+      <div class="card">
+        <h2>Marchés (ticks)</h2>
+        <table id="markets"><thead><tr><th>Actif</th><th>Prix $</th><th>Liquidité</th><th>Age tick</th></tr></thead><tbody></tbody></table>
+      </div>
+      <div class="card">
+        <h2>Portefeuilles fantômes (24h, net)</h2>
+        <table id="shadows"><thead><tr><th>Stratégie</th><th>NAV</th><th>Δ24h</th><th>Trades</th><th>Alloc</th></tr></thead><tbody></tbody></table>
+      </div>
+      <div class="card span-2">
+        <h2>Journal d'explication (temps réel)</h2>
+        <ul id="log"></ul>
+      </div>
+      <div class="card">
+        <h2>Derniers trades</h2>
+        <table id="trades"><thead><tr><th>Heure</th><th>Actif</th><th>Sens</th><th>Qté</th><th>Prix $</th><th>Frais</th><th>Proceeds/Investi</th><th>PnL</th></tr></thead><tbody></tbody></table>
+      </div>
+    </section>
+  </main>
+
+  <footer>
+    <span id="fresh"></span> · read-only · /api documentée · /metrics Prometheus
+  </footer>
+  <script src="/vendor/uPlot.iife.min.js"></script>
+  <script src="/app.js"></script>
+</body>
+</html>

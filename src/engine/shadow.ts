@@ -173,5 +173,12 @@ function navAtOrBefore(db: DB, shadow: string, tsMs: number): number | null {
       "SELECT nav_usd FROM shadow_nav WHERE shadow = ? AND ts_ms <= ? ORDER BY ts_ms DESC LIMIT 1",
     )
     .get(shadow, tsMs) as { nav_usd: number } | undefined;
-  return row ? row.nav_usd : null;
+  if (row) {return row.nav_usd;}
+  // fenêtre plus jeune que 24h: base sur le tout premier point d'historique
+  const first = db
+    .prepare(
+      "SELECT nav_usd FROM shadow_nav WHERE shadow = ? ORDER BY ts_ms ASC LIMIT 1",
+    )
+    .get(shadow) as { nav_usd: number } | undefined;
+  return first ? first.nav_usd : null;
 }
