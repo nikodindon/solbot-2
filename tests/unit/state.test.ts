@@ -27,7 +27,7 @@ describe("state", () => {
     addLot(db, SOL, "SOL", 0.5, 102, 1000);
     // lot 2: 0.5 @ 104 (0.5*104=52 investi)
     addLot(db, SOL, "SOL", 0.5, 104, 2000);
-    let pos = getPosition(db, SOL);
+    const pos = getPosition(db, SOL);
     expect(pos).not.toBeNull();
     expect(pos!.qty).toBeCloseTo(1.0, 9);
     expect(pos!.avgEntryUsd).toBeCloseTo(103, 6);
