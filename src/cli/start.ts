@@ -119,6 +119,12 @@ function hasCandles(rt: Runtime): boolean {
 }
 
 async function prepareLive(rt: Runtime): Promise<void> {
+  // garde live : backtest concluant (PLAN étape 12) exigé conjointement aux autres fichiers
+  const { kvGetJson } = await import("../state/kv.js");
+  const verdict = kvGetJson<{ ok: boolean; at: number } | null>(rt.db, "backtestVerdict", null);
+  if (!verdict || verdict.ok !== true || Date.now() - verdict.at > 7 * 86_400_000) {
+    throw new Error("live: backtest concluant requis (npm run backtest) sur les 7 derniers jours");
+  }
   // backfill GeckoTerminal si historique trop court (uniquement hors demo)
   const gecko = new GeckoBackfiller(rt.db);
   for (const t of rt.cfg.universe.tokens) {

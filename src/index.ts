@@ -5,6 +5,7 @@ import { runInit } from "./cli/init.js";
 import { runStart } from "./cli/start.js";
 import { runDoctor } from "./cli/doctor.js";
 import { runBalance } from "./cli/balance.js";
+import { runBacktestCmd } from "./cli/backtest.js";
 
 const log = pino({ level: process.env["LOG_LEVEL"] ?? "info", base: undefined });
 
@@ -51,6 +52,15 @@ program
       console.log(`${c.ok ? "✔" : "✘"} ${c.name.padEnd(16)} ${c.detail}`);
     }
     if (!res.ok) {process.exitCode = 1;}
+  });
+
+program
+  .command("backtest")
+  .description("rejoue le moteur sur l'historique GTK 15m ; verdict pour la garde live")
+  .option("--days <n>", "fenêtre de backfill en jours", "30")
+  .action(async (opts) => {
+    const out = await runBacktestCmd({ days: Number(opts.days) });
+    console.log(out);
   });
 
 program
