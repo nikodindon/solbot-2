@@ -16,6 +16,8 @@ const ENV_TEMPLATE = [
   "MODE=paper",
   "# clé privée base58 écrite en tête de fichier par `init`",
   "# JUPITER_API_KEY=",
+  "# clé démo gratuite coingecko.com — requise pour l'OHLCV backfill/backtest",
+  "# GECKO_API_KEY=",
   "# SOLANA_RPC_URL=",
   "# DASHBOARD_TOKEN=",
   "LOG_LEVEL=info",

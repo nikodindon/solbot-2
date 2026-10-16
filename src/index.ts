@@ -1,11 +1,20 @@
 #!/usr/bin/env node
 import { Command } from "commander";
 import pino from "pino";
+import { loadEnv } from "./utils/env-file.js";
 import { runInit } from "./cli/init.js";
 import { runStart } from "./cli/start.js";
 import { runDoctor } from "./cli/doctor.js";
 import { runBalance } from "./cli/balance.js";
 import { runBacktestCmd } from "./cli/backtest.js";
+
+// .env → process.env (process.env garde la priorité, standard dotenv)
+const envLoaded = loadEnv(process.cwd());
+for (const [k, v] of Object.entries(envLoaded.data)) {
+  if (v !== undefined && process.env[k] === undefined) {
+    (process.env as Record<string, string | undefined>)[k] = v;
+  }
+}
 
 const log = pino({ level: process.env["LOG_LEVEL"] ?? "info", base: undefined });
 

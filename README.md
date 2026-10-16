@@ -102,4 +102,13 @@ npm run lint
 npm run typecheck
 ```
 
+## Dépannage
+
+- `gecko ohlcv 404/401` au backtest : l'endpoint **OHLCV de GeckoTerminal exige désormais
+  une clé**. Register une clé démo gratuite sur coingecko.com, puis dans `.env` :
+  `GECKO_API_KEY=CG-…` (le client bascule alors sur l'endpoint v3 onchain avec le header
+  `x-cg-demo-api-key`).
+- `.env` est chargé au lancement de la CLI (`init` écrit le fichier chmod 600) — les
+  variables gagnées n'écrasent jamais `process.env`.
+
 Plan complet : `PLAN.md`. Licence MIT.

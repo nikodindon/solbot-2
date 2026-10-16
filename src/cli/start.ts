@@ -10,7 +10,7 @@ import { JupiterClient } from "../jupiter/client.js";
 import { PriceApi } from "../jupiter/price.js";
 import { SwapApi } from "../jupiter/swap.js";
 import { Poller } from "../market/poller.js";
-import { GeckoBackfiller } from "../market/gecko.js";
+import { GeckoBackfiller, geckoDefaults } from "../market/gecko.js";
 import { RpcClient } from "../solana/rpc.js";
 import { EnvSigner } from "../wallet/signer.js";
 import { DashboardServer } from "../dashboard/server.js";
@@ -126,7 +126,7 @@ async function prepareLive(rt: Runtime): Promise<void> {
     throw new Error("live: backtest concluant requis (npm run backtest) sur les 7 derniers jours");
   }
   // backfill GeckoTerminal si historique trop court (uniquement hors demo)
-  const gecko = new GeckoBackfiller(rt.db);
+  const gecko = new GeckoBackfiller(rt.db, { ...geckoDefaults(), apiKey: process.env["GECKO_API_KEY"] ?? null });
   for (const t of rt.cfg.universe.tokens) {
     try {
       const n = await gecko.backfillToken(t.mint, "15m", 30);

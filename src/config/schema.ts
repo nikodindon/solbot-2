@@ -223,6 +223,7 @@ export const envSchema = z
     SOLANA_RPC_URL: z.string().url().optional(),
     LOG_LEVEL: z.enum(["fatal", "error", "warn", "info", "debug", "trace"]).optional(),
     DASHBOARD_TOKEN: z.string().optional(),
+    GECKO_API_KEY: z.string().optional(),
     MODE: z.enum(MODES).optional(),
   })
   .passthrough();

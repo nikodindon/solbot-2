@@ -14,14 +14,16 @@ export interface GeckoCfg {
   requestPauseMs: number;
   maxPages: number;
   maxRetries: number;
+  /** clé démo CoinGecko (GECKO_API_KEY) — OHLCV exige une clé depuis 2026 : bascule l'URL */
+  apiKey?: string | null;
 }
 
 export function geckoDefaults(): GeckoCfg {
-  return { baseUrl: "https://api.geckoterminal.com/api/v2", requestPauseMs: 1100, maxPages: 12, maxRetries: 3 };
+  return { baseUrl: "https://api.geckoterminal.com/api/v2", requestPauseMs: 1100, maxPages: 12, maxRetries: 3, apiKey: null };
 }
 
 export interface FetchLike {
-  (input: string): Promise<{
+  (input: string, init?: { headers?: Record<string, string> }): Promise<{
     ok: boolean
     status: number
     json(): Promise<unknown>
@@ -50,23 +52,41 @@ function sleepMs(ms: number): Promise<void> {
  * Politeness: pause between requests, honors Retry-After on 429.
  */
 export class GeckoBackfiller {
+  /** apiKey → endpoint v3 onchain (où OHLCV accepte les clés démo). */
+  private readonly baseUrl: string;
+  private readonly apiKey: string | null;
+  private readonly cfg: GeckoCfg;
+
   constructor(
     private readonly db: DB,
-    private readonly cfg: GeckoCfg = geckoDefaults(),
+    cfg: GeckoCfg = geckoDefaults(),
     private readonly fetchImpl: FetchLike = (globalThis as unknown as { fetch: FetchLike }).fetch,
-  ) {}
+  ) {
+    this.cfg = { ...cfg, apiKey: null };
+    this.apiKey = cfg.apiKey ?? null;
+    this.baseUrl = this.apiKey && cfg.baseUrl === "https://api.geckoterminal.com/api/v2"
+      ? "https://api.coingecko.com/api/v3/onchain"
+      : cfg.baseUrl;
+  }
+
+  private reqInit(): { headers?: Record<string, string> } | undefined {
+    return this.apiKey ? { headers: { "x-cg-demo-api-key": this.apiKey } } : undefined;
+  }
 
   async bestPool(mint: string): Promise<string | null> {
-    const url = `${this.cfg.baseUrl}/networks/solana/tokens/${mint}/pools?page=1&sort=h24_volume_usd_liquidity_desc`;
+    const url = `${this.baseUrl}/networks/solana/tokens/${mint}/pools?page=1&sort=h24_volume_usd_liquidity_desc`;
     let data: PoolResp | null = null;
     for (let attempt = 1; attempt <= this.cfg.maxRetries; attempt++) {
       await sleepMs(this.cfg.requestPauseMs);
-      const res = await this.fetchImpl(url);
+      const res = await this.fetchImpl(url, this.reqInit());
       if (res.status === 429 || res.status >= 500) {
         await sleepMs(retryAfterOrBackoff(res.headers, attempt));
         continue;
       }
-      if (!res.ok) {throw new Error(`gecko pools ${res.status}: ${(await res.text()).slice(0, 200)}`);}
+      if (!res.ok) {
+        const hint = this.apiKey ? "" : " — accès pools OK sans clé (si 404 persistant: URL du pool à re-vérifier)";
+        throw new Error(`gecko pools ${res.status}: ${(await res.text()).slice(0, 200)}${hint}`);
+      }
       data = (await res.json()) as PoolResp;
       break;
     }
@@ -105,16 +125,19 @@ export class GeckoBackfiller {
         currency: "usd",
       });
       if (before !== undefined) {params.set("before_timestamp", String(before));}
-      const url = `${this.cfg.baseUrl}/networks/solana/pools/${pool}/ohlcv/${g.unit}?${params.toString()}`;
+      const url = `${this.baseUrl}/networks/solana/pools/${pool}/ohlcv/${g.unit}?${params.toString()}`;
       let rows: number[][] | null = null;
       for (let attempt = 1; attempt <= this.cfg.maxRetries; attempt++) {
         await sleepMs(this.cfg.requestPauseMs);
-        const res = await this.fetchImpl(url);
+        const res = await this.fetchImpl(url, this.reqInit());
         if (res.status === 429 || res.status >= 500) {
           await sleepMs(retryAfterOrBackoff(res.headers, attempt));
           continue;
         }
-        if (!res.ok) {throw new Error(`gecko ohlcv ${res.status}: ${(await res.text()).slice(0, 200)}`);}
+        if (!res.ok) {
+          const hint = this.apiKey ? "" : " — l'OHLCV exige une clé (register une clé démo gratuite CoinGecko puis GECKO_API_KEY in .env)";
+          throw new Error(`gecko ohlcv ${res.status}: ${(await res.text()).slice(0, 200)}${hint}`);
+        }
         const json = (await res.json()) as OhlcvResp;
         rows = json.data?.attributes?.ohlcv_list ?? null;
         break;

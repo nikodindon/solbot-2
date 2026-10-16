@@ -1,6 +1,6 @@
 import { createRuntime, type StartOpts } from "./start.js";
 import { runBacktest, type BacktestResult } from "../backtest/runner.js";
-import { GeckoBackfiller } from "../market/gecko.js";
+import { GeckoBackfiller, geckoDefaults } from "../market/gecko.js";
 import { kvSetJson } from "../state/kv.js";
 import { countImportedCandles } from "../state/market.js";
 import { SOL_MINT } from "../constants.js";
@@ -23,10 +23,10 @@ export async function runBacktestCmd(opts: BacktestOpts = {}): Promise<string> {
       imported += countImportedCandles(rt.db, m, "15m");
     }
     if (imported < mints.length * (needDays * 96) * 0.8) {
-      if (!rt.rpc && opts.demo !== true) {
-        rt.log.warn({}, "backfill GeckoTerminal (30 j, garanti < 30 req/mint)…");
+      if (!process.env["GECKO_API_KEY"]) {
+        rt.log.warn({}, "GECKO_API_KEY absente — l'OHLCV GeckoTerminal exige une clé démo gratuite (register coingecko.com)");
       }
-      const gecko = new GeckoBackfiller(rt.db);
+      const gecko = new GeckoBackfiller(rt.db, { ...geckoDefaults(), apiKey: process.env["GECKO_API_KEY"] ?? null });
       for (const m of mints) {
         try {
           const n = await gecko.backfillToken(m, "15m", needDays);
