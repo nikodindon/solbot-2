@@ -10,7 +10,7 @@ describe("config", () => {
     expect(cfg.risk.min_trade_usd).toBe(1.5);
     expect(cfg.risk.max_trade_usd).toBe(3);
     expect(cfg.risk.gas_reserve_sol).toBeCloseTo(0.005, 6);
-    expect(cfg.costs.edge_multiplier).toBe(3);
+    expect(cfg.costs.edge_multiplier).toBe(4);
     expect(cfg.universe.tokens.map((t) => t.symbol)).toEqual(["JUP", "BONK"]);
     expect(cfg.funding.min_sol_usd).toBe(1);
     expect(cfg.funding.min_usdc_usd).toBe(5);

@@ -112,7 +112,7 @@ export const riskSchema = z
 
 export const costsSchema = z
   .object({
-    edge_multiplier: z.number().min(1).max(50).default(3),
+    edge_multiplier: z.number().min(1).max(50).default(4),
     expected_slippage_bps: z.number().min(0).max(1000).default(15),
     paper_fill_slippage_bps: z.number().min(0).max(1000).default(10),
   })

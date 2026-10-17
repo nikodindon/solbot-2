@@ -62,7 +62,7 @@ risk:                       # micro-capital : chaque dollar compte
   ata_rent_horizon_trades: 20  # amortit la rent (~0,00204 SOL) d'un nouveau compte de token
 
 costs:                      # filtre « edge net de coûts »
-  edge_multiplier: 3        # entrer seulement si edge > 3× coût aller-retour estimé
+  edge_multiplier: 4        # entrer seulement si edge > 4× coût aller-retour estimé (backtest 30j: ×3 = −21%, ×4 = −3.8%, ×5 = plus aucun trade)
   expected_slippage_bps: 15
   paper_fill_slippage_bps: 10
 
