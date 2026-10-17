@@ -106,7 +106,7 @@ describe("engine — intégration", () => {
       expect(dec.some((d) => d.kind === "allocation" || d.kind === "info")).toBe(true);
       const points = listEquity(h.db);
       expect(points.length).toBeGreaterThanOrEqual(1);
-      expect(points[0]!.navUsd).toBeCloseTo(6, 1); // 6$ cash, pas de position → NAV 6
+      expect(points[0]!.navUsd).toBeCloseTo(6 + 0.05 * 150, 1); // 6$ cash + wallet gaz virtuel 0.05 SOL @150
       expect(points[0]!.benchmarkBhUsd).not.toBeNull();
     } finally {
       fs.rmSync(root, { recursive: true, force: true });

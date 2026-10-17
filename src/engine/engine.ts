@@ -9,6 +9,7 @@ import {
   buildSnapshot,
   benchmarkBuyHold,
   paperCashGet,
+  paperSolGet,
   type PortfolioSnapshot,
   type SnapshotOpts,
 } from "../portfolio/portfolio.js";
@@ -181,17 +182,17 @@ export class Engine {
       }
 
       // 5) shadows + allocation du capital (hystérésis)
+      // chaque fantôme évalue ses signaux contre son PROPRE livre (sinon les sorties
+      // de stratégie ne visent jamais ses holdings → bookings fantômes figés).
+      const noopRec = () => {};
       const allocated = runShadows(
         db,
         cfg,
-        this.deps.strategies.map((b) => ({
-          strategy: b.strategy,
-          weight: b.weight,
-          signals: evals.get(b.strategy.name)?.signals ?? [],
-        })),
+        this.deps.strategies.map((b) => ({ strategy: b.strategy, weight: b.weight })),
         (mint) => prices.get(mint),
         this.symbols(),
         nowMs,
+        (name, portfolio) => this.evaluateStrategyFor(name, portfolio, prices, regimes, nowMs, noopRec),
       );
       for (const line of allocated.lines) {
         const strat = line.split("|")[0] ?? null;
@@ -381,6 +382,7 @@ export class Engine {
     return {
       mode: this.deps.mode,
       paperCashUsdc: paperCashGet(this.deps.db, this.deps.cfg.paper_initial_usdc),
+      paperSol: paperSolGet(this.deps.db, this.deps.cfg.paper_initial_sol),
       balances: null,
       solPrice: prices.get(SOL_MINT) ?? 0,
       usdcPrice: prices.get(USDC_MINT) || 1,
@@ -516,36 +518,50 @@ export class Engine {
     };
     const evals = new Map<string, StrategyEval>();
     for (const b of this.deps.strategies) {
-      const name = b.strategy.name;
-      const signals: Signal[] = [];
-      for (const mint of this.assetMints()) {
-        if (mint === USDC_MINT) {continue;}
-        const r = regimes.get(mint);
-        if (!r || !this.regimeAllows(name, r)) {continue;}
-        const price = prices.get(mint);
-        if (price === undefined || !(price > 0)) {continue;}
-        const res = b.strategy.evaluate(
-          {
-            mint,
-            symbol: this.symbol(mint),
-            decimals: this.decimalsOf(mint),
-            price,
-            liquidityUsd: this.liquidityOf(mint),
-            candles: getHistoryCandles(db, mint, STRAT_TF, 400, nowMs),
-            regime: r,
-            volumeRatio: null,
-            ataOpen: getPosition(db, mint) !== null,
-          },
-          stratPortfolio,
-        );
-        for (const s of res.signals) {signals.push(s);}
-        for (const line of res.notes) {
-          rec({ kind: res.signals.length > 0 ? "signal" : "info", strategy: name, mint, line });
-        }
-      }
-      evals.set(name, { signals, notes: [] });
+      evals.set(b.strategy.name, this.evaluateStrategyFor(b.strategy.name, stratPortfolio, prices, regimes, nowMs, rec));
     }
     return evals;
+  }
+
+  /** Évalue UNE stratégie contre UN portefeuille (réel OU fantôme). Extrait, pur. */
+  private evaluateStrategyFor(
+    name: string,
+    stratPortfolio: StrategyPortfolio,
+    prices: Map<string, number>,
+    regimes: Map<string, RegimeResult>,
+    nowMs: number,
+    rec: (d: Omit<DecisionRecord, "tsMs" | "tickId">) => void,
+  ): StrategyEval {
+    const db = this.deps.db;
+    const b = this.deps.strategies.find((x) => x.strategy.name === name);
+    if (!b) {return { signals: [], notes: [] };}
+    const signals: Signal[] = [];
+    for (const mint of this.assetMints()) {
+      if (mint === USDC_MINT) {continue;}
+      const r = regimes.get(mint);
+      if (!r || !this.regimeAllows(name, r)) {continue;}
+      const price = prices.get(mint);
+      if (price === undefined || !(price > 0)) {continue;}
+      const res = b.strategy.evaluate(
+        {
+          mint,
+          symbol: this.symbol(mint),
+          decimals: this.decimalsOf(mint),
+          price,
+          liquidityUsd: this.liquidityOf(mint),
+          candles: getHistoryCandles(db, mint, STRAT_TF, 400, nowMs),
+          regime: r,
+          volumeRatio: null,
+          ataOpen: getPosition(db, mint) !== null,
+        },
+        stratPortfolio,
+      );
+      for (const s of res.signals) {signals.push(s);}
+      for (const line of res.notes) {
+        rec({ kind: res.signals.length > 0 ? "signal" : "info", strategy: name, mint, line });
+      }
+    }
+    return { signals, notes: [] };
   }
 
   private regimeAllows(name: string, r: RegimeResult): boolean {

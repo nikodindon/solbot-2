@@ -5,7 +5,7 @@ import { appConfigSchema } from "../../src/config/schema.js";
 import { Executor, type TradeIntent } from "../../src/execution/executor.js";
 import { getPosition } from "../../src/state/portfolio-repo.js";
 import { listTrades, costBreakdown } from "../../src/state/trades.js";
-import { paperCashGet, buildSnapshot, benchmarkBuyHold } from "../../src/portfolio/portfolio.js";
+import { paperCashGet, paperSolGet, buildSnapshot, benchmarkBuyHold } from "../../src/portfolio/portfolio.js";
 import { JUP_MINT } from "../../src/constants.js";
 
 type Cfg = ReturnType<typeof appConfigSchema.parse>;
@@ -75,6 +75,22 @@ describe("executor paper", () => {
     expect(costs.solFeeUsd).toBeGreaterThan(0);
     // frais Jupiter JUP↔USDC = 0 bps (paire Jupiter) mais décomposés quand même
     expect(costs.jupFeeUsd).toBeCloseTo(0, 9);
+  });
+
+  it("wallet gaz paper: seed, déduction des frais à l'achat, refund rent à la clôture", async () => {
+    const { db, ex, cfg } = await setup();
+    const seeded = paperSolGet(db, cfg.paper_initial_sol);
+    expect(seeded).toBeCloseTo(cfg.paper_initial_sol, 9);
+    await ex.execute(mkIntent()); // achat
+    const afterBuy = paperSolGet(db, cfg.paper_initial_sol);
+    expect(afterBuy).toBeLessThan(seeded); // gas + rent déduits
+    const sell = await ex.execute(
+      mkIntent({ side: "sell", qty: getPosition(db, JUP_MINT)!.qty, spendUsd: 0, priceUsd: 1 }),
+    );
+    expect(sell.ok).toBe(true);
+    const afterSell = paperSolGet(db, cfg.paper_initial_sol);
+    // gas vente + refund rent au close ATA
+    expect(afterSell).toBeGreaterThan(afterBuy);
   });
 
   it("vente sans quantité → échec propre", async () => {

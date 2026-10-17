@@ -177,13 +177,17 @@ export class RiskManager {
     };
     const costs = estimateCostWithSlippage(q, this.costCfg);
     me.costBps = costs.totalBps.toFixed(1);
-    const threshold = this.costCfg.edgeMultiplier * costs.totalBps;
+    // seuil sur les coûts RÉCURRENTS: le loyer ATA one-shot est amorti sur 10 cycles
+    // (sinon un trade micro ~2$ aurait besoin d'un edge > 20% juste pour la rent).
+    const recurringBps = costs.totalBps - (costs.rentBps ?? 0);
+    const amortizedBps = recurringBps + (costs.rentBps ?? 0) / 10;
+    const threshold = this.costCfg.edgeMultiplier * amortizedBps;
     me.edgeThresholdBps = threshold.toFixed(1);
     if (!signal.edgeExempt && signal.edgeEstimateBps < threshold) {
       return reject(
         signal,
         "edge_net",
-        `edge attendu ${signal.edgeEstimateBps.toFixed(0)} bps < seuil ${this.costCfg.edgeMultiplier}×coûts (${threshold.toFixed(0)} bps) — coûts aller-retour: ${costs.totalBps.toFixed(1)} bps (frais Jupiter ${costs.feeBps}, SOL ${costs.solBps.toFixed(2)}, slippage ${costs.slippageBps}${costs.rentBps ? `, rent ATA ${costs.rentBps.toFixed(1)}` : ""})`,
+        `edge attendu ${signal.edgeEstimateBps.toFixed(0)} bps < seuil ${this.costCfg.edgeMultiplier}×coûts (${threshold.toFixed(0)} bps) — coûts aller-retour: ${costs.totalBps.toFixed(1)} bps amortisés ${amortizedBps.toFixed(1)} bps (frais Jupiter ${costs.feeBps}, SOL ${costs.solBps.toFixed(2)}, slippage ${costs.slippageBps}${costs.rentBps ? `, rent ATA ${costs.rentBps.toFixed(1)} (amortie ÷10)` : ""})`,
         me,
         0,
         this.cfg,

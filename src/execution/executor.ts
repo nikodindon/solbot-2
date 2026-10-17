@@ -2,7 +2,7 @@ import type { DB } from "../state/db.js";
 import type { AppConfig } from "../config/schema.js";
 import { insertTrade, type TradeRecord } from "../state/trades.js";
 import { addLot, reducePositionFifo, getPosition, setStops } from "../state/portfolio-repo.js";
-import { paperCashGet, paperCashSet } from "../portfolio/portfolio.js";
+import { paperCashGet, paperCashSet, paperSolGet, paperSolSet } from "../portfolio/portfolio.js";
 import { simulateBuy, simulateSell } from "./paper-broker.js";
 import { modeledPairFeeBps } from "../jupiter/swap.js";
 import type { SwapApi } from "../jupiter/swap.js";
@@ -120,6 +120,7 @@ export class Executor {
         paperCashSet(db, paperCashGet(db, cfg.paper_initial_usdc) - rentUsd);
       }
       paperCashSet(db, paperCashGet(db, cfg.paper_initial_usdc) - spend);
+      paperSolSet(db, paperSolGet(db, cfg.paper_initial_sol) - (f.solFee + rentSol));
       const stopPrice = intent.priceUsd * (1 - (intent.stopLossPct ?? cfg.risk.stop_loss_pct) / 100);
       const tpPrice = intent.priceUsd * (1 + (intent.takeProfitPct ?? cfg.risk.take_profit_pct) / 100);
       setStops(db, intent.mint, stopPrice, tpPrice);
@@ -167,6 +168,12 @@ export class Executor {
     const f = simulateSell(qty, intent.priceUsd, fill);
     const red = reducePositionFifo(db, intent.mint, intent.symbol, qty, f.proceedsUsd / qty, ts);
     paperCashSet(db, paperCashGet(db, cfg.paper_initial_usdc) + f.proceedsUsd);
+    paperSolSet(db, paperSolGet(db, cfg.paper_initial_sol) - f.solFee);
+    // close ATA account at full closure: refund the rent (at worst case charged on entry)
+    const closeRentSol = red.position === null && intent.mint !== SOL_MINT ? ATA_RENT_LAMPORTS / LAMPORTS_PER_SOL : 0;
+    if (closeRentSol > 0) {
+      paperSolSet(db, paperSolGet(db, cfg.paper_initial_sol) + closeRentSol);
+    }
     const priceNet = f.proceedsUsd / qty;
     const rec: TradeRecord = {
       tsMs: ts,
@@ -187,7 +194,7 @@ export class Executor {
       realizedPnlUsd: red.realizedPnlUsd,
       status: "simulated",
       reason: intent.reason,
-      note: `impact ${f.impactBps.toFixed(1)} bps`,
+      note: `impact ${f.impactBps.toFixed(1)} bps${closeRentSol > 0 ? `, ATA close: rent remboursée (${closeRentSol.toFixed(6)} SOL)` : ""}`,
     };
     insertTrade(db, rec);
     return {

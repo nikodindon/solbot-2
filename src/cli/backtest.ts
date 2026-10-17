@@ -48,7 +48,7 @@ export function formatBacktest(res: BacktestResult): string {
   const d = (ts: number) => new Date(ts).toISOString().slice(0, 10);
   const lines = [
     `backtest ${d(res.fromTs)} → ${d(res.toTs)} (${res.guard.days} j, ${res.steps} pas 15m)`,
-    `NAV finale : ${res.finalNav.toFixed(4)}$ sur ${res.initialUsdc}$ initial (${res.pnlUsd >= 0 ? "+" : ""}${res.pnlUsd.toFixed(4)}$ / ${res.pnlPct.toFixed(2)} %)`,
+    `NAV finale : ${res.finalNav.toFixed(4)}$ sur ${res.initialUsdc.toFixed(2)}$ initial (${res.pnlUsd >= 0 ? "+" : ""}${res.pnlUsd.toFixed(4)}$ / ${res.pnlPct.toFixed(2)} %)`,
     `max drawdown : ${res.maxDrawdownPct.toFixed(1)} % · trades : ${res.trades} · buy&hold : ${res.buyHoldUsd === null ? "n/a" : `${res.buyHoldUsd.toFixed(4)}$`}`,
     `coûts cumulés : JUP ${res.costs.jupFeeUsd.toFixed(4)}$ · SOL ${res.costs.solFeeUsd.toFixed(4)}$ · slippage réalisé ${res.costs.realizedSlippageUsd.toFixed(4)}$`,
     `garde : ${res.guard.ok ? "CONCLUANT" : "NON CONCLUANT"} (jours ${res.guard.days} ≥ ${res.guard.minDays}${res.guard.positivePnlRequired ? `, PnL ${res.guard.positivePnl ? ">" : "<"} 0 requis` : " ; PnL>0 non requis"})`,

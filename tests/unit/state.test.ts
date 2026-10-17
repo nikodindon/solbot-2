@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { openDb } from "../../src/state/db.js";
+import { openDb, closeDb } from "../../src/state/db.js";
 import { migrate, currentVersion, tablesOf } from "../../src/state/migrations.js";
 import { addLot, reducePositionFifo, getPosition } from "../../src/state/portfolio-repo.js";
 import { insertTrade, listTrades, costBreakdown, cumRealizedPnl } from "../../src/state/trades.js";
@@ -151,5 +151,24 @@ describe("state", () => {
     kvSetJson(db, "navPeak", { v: 6.12 });
     expect(kvGetJson(db, "navPeak", { v: 0 })).toEqual({ v: 6.12 });
     expect(kvGetJson(db, "absent", { v: 1 })).toEqual({ v: 1 });
+  });
+});
+
+describe("migration v3 candles_imported ts ms", () => {
+  it("normalise les ts secondes* en ms, sans toucher les ms", () => {
+    const db = openDb({ path: ":memory:", memory: true });
+    migrate(db);
+    // simulation: DB migrée v2, puis bougies insérées en secondes, puis re-ouverte + migrate
+    db.prepare("DELETE FROM schema_migrations WHERE version = 3").run();
+    db.prepare("INSERT INTO candles_imported (mint, tf, ts, open, high, low, close, volume_usd) VALUES (?, '15m', ?, 1, 1, 1, 1, 1)").run("JUP", 1792179461);
+    db.prepare("INSERT INTO candles_imported (mint, tf, ts, open, high, low, close, volume_usd) VALUES (?, '15m', ?, 1, 1, 1, 1, 1)").run("JUP", 1792179461000);
+    migrate(db);
+    const secs = db.prepare("SELECT ts FROM candles_imported WHERE mint=? AND ts < 40000000000").get("JUP") as { ts: number } | undefined;
+    expect(secs).toBeUndefined();
+    const ms = (db.prepare("SELECT ts FROM candles_imported WHERE mint='JUP'").all() as { ts: number }[]).map((r) => r.ts);
+    // le doublon (même seconde, déjà présent en ms) a été supprimé par la garde
+    expect(ms.filter((t) => t === 1792179461000)).toHaveLength(1);
+    expect(ms).toHaveLength(1);
+    closeDb(db);
   });
 });

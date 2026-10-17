@@ -196,6 +196,7 @@ export const appConfigSchema = z
     backtest: backtestSchema.default({}),
     demo: demoSchema.default({}),
     paper_initial_usdc: z.number().min(0).max(1_000_000).default(6),
+    paper_initial_sol: z.number().min(0).max(100).default(0.05),
     database: z
       .object({ path: z.string().min(1).default("./data/solbot2.sqlite") })
       .strict()

@@ -4,7 +4,7 @@ import { simulateBuy, simulateSell } from "../execution/paper-broker.js";
 import { modeledPairFeeBps } from "../jupiter/swap.js";
 import { USDC_MINT } from "../constants.js";
 import type { AppConfig } from "../config/schema.js";
-import type { Signal, Strategy } from "../strategy/types.js";
+import type { Strategy, StrategyEval, StrategyPortfolio } from "../strategy/types.js";
 import { kvGetJson, kvSetJson } from "../state/kv.js";
 
 export interface ShadowTickResult {
@@ -16,17 +16,20 @@ export interface ShadowTickResult {
 const WINDOW_MS = 24 * 3_600_000;
 
 /**
- * Portefeuilles fantômes: chaque stratégie trade un capital virtuel, aux mêmes coûts que le
- * paper broker (frais Jupiter + slippage + fees SOL). Le capital réel suit la meilleure
- * performance glissante 24 h nette de coûts (samples min + marge hystérésis).
+ * Portefeuilles fantômes: chaque stratégie trade un capital virtuel contre son PROPRE
+ * livre (holdings fantômes), aux mêmes coûts que le paper broker (frais Jupiter + slippage
+ * + fees SOL). Le capital réel suit la meilleure performance glissante 24 h nette de coûts
+ * (échantillons NAV min + marge hystérésis). Sans livre propre, les sorties de stratégie
+ * ne viseraient jamais les holdings fantômes et les livres resteraient figés.
  */
 export function runShadows(
   db: DB,
   cfg: AppConfig,
-  strategies: { strategy: Strategy; weight: number; signals: Signal[] }[],
+  strategies: { strategy: Strategy; weight: number }[],
   markOf: (mint: string) => number | undefined,
   symbols: Map<string, string>,
   nowMs: number,
+  evaluateFor: (name: string, portfolio: StrategyPortfolio) => StrategyEval,
 ): ShadowTickResult {
   const sc = cfg.shadow;
   const fillBase = {
@@ -36,19 +39,37 @@ export function runShadows(
     liquidityUsd: 2_000_000,
   };
   const lines: string[] = [];
-  const scores: { strategy: string; scoreUsd: number; eligible: boolean }[] = [];
+  const scores: { strategy: string; scoreUsd: number; eligible: boolean; navSamples: number; trades: number }[] = [];
 
   for (const s of strategies) {
     const name = s.strategy.name;
     const st = loadShadowState(db, name, sc.cash_usd);
     const holdings = new Map(st.holdings.map((h) => [h.mint, { qty: h.qty, avgEntryUsd: h.avgEntryUsd }]));
     let cash = st.cashUsd;
-    let positionsUsd = 0;
-    for (const [mint, h] of holdings) {
-      positionsUsd += h.qty * (markOf(mint) ?? h.avgEntryUsd);
-    }
+    const valueOf = (hs: Map<string, { qty: number; avgEntryUsd: number }>): number => {
+      let usd = 0;
+      for (const [mint, h] of hs) {
+        usd += h.qty * (markOf(mint) ?? h.avgEntryUsd);
+      }
+      return usd;
+    };
 
-    const sellSignals = s.signals.filter((x) => x.side === "sell");
+    // évaluation de CE livre fantôme (holdings propres → sorties de stratégie pertinentes)
+    const positioned = [...holdings].map(([mint, h]) => ({
+      mint,
+      symbol: symbols.get(mint) ?? mint.slice(0, 4),
+      qty: h.qty,
+      avgEntryUsd: h.avgEntryUsd,
+      valueUsd: h.qty * (markOf(mint) ?? h.avgEntryUsd),
+    }));
+    const ev = evaluateFor(name, {
+      navUsd: cash + valueOf(holdings),
+      cashUsd: cash,
+      positioned,
+      solPrice: fillBase.solPrice,
+    });
+
+    const sellSignals = ev.signals.filter((x) => x.side === "sell");
     for (const sig of sellSignals) {
       const hold = holdings.get(sig.mint);
       const price = markOf(sig.mint);
@@ -75,9 +96,8 @@ export function runShadows(
       );
     }
 
-    // positions USDC ne sont pas tradées par les stratégies hors SOL
     if (holdings.size < sc.max_positions) {
-      const buySignals = s.signals.filter(
+      const buySignals = ev.signals.filter(
         (x) => x.side === "buy" && !holdings.has(x.mint),
       );
       const price = buySignals.length > 0 ? markOf(buySignals[0]!.mint) : undefined;
@@ -104,24 +124,29 @@ export function runShadows(
       }
     }
 
-    positionsUsd = 0;
-    for (const [mint, h] of holdings) {
-      positionsUsd += h.qty * (markOf(mint) ?? h.avgEntryUsd);
-    }
+    const positionsUsd = valueOf(holdings);
     const navUsd = cash + positionsUsd;
     insertShadowNav(db, name, nowMs, navUsd);
 
-    // score glissant 24h (net, de la NAV enregistrée il y a ~24h)
+    // score glissant 24h (net, de la NAV enregistrée il y a ~24h).
+    // Éligibilité = SUFFISANCE des échantillons NAV dans la fenêtre (pas un compte de trades :
+    // les stratégies lentes n'arriveraient jamais à min_samples trades/24h et l'hystérésis
+    // s'auto-bloquerait → 0 trade à vie).
     const navThen = navAtOrBefore(db, name, nowMs - WINDOW_MS);
+    const navSamples = navSampleCountWindow(db, name, nowMs - WINDOW_MS);
     const trades = shadowTradeCountWindow(db, name, nowMs - WINDOW_MS);
     if (navThen !== null) {
       scores.push({
         strategy: name,
         scoreUsd: navUsd - navThen,
-        eligible: trades >= sc.min_samples,
+        eligible: navSamples >= sc.min_samples,
+        navSamples,
+        trades,
       });
     }
-    lines.push(`${name}|shadow: NAV ${navUsd.toFixed(3)}$ (cash ${cash.toFixed(3)}$, ${holdings.size} pos, ${trades} trades/24h)`);
+    lines.push(
+      `${name}|shadow: NAV ${navUsd.toFixed(3)}$ (cash ${cash.toFixed(3)}$, ${holdings.size} pos, ${trades} trades/24h, ${navSamples} samples NAV)`,
+    );
   }
 
   // allocation: meilleure perf glissante, hystérésis marge + samples min
@@ -158,6 +183,13 @@ export function runShadows(
     kvSetJson(db, "allocatedStrategy", allocation);
   }
   return { allocation: allocation ?? "", allocationChanged: changed, lines };
+}
+
+function navSampleCountWindow(db: DB, shadow: string, sinceTs: number): number {
+  const row = db
+    .prepare("SELECT COUNT(*) AS c FROM shadow_nav WHERE shadow = ? AND ts_ms >= ?")
+    .get(shadow, sinceTs) as { c: number };
+  return row.c;
 }
 
 function shadowTradeCountWindow(db: DB, shadow: string, sinceTs: number): number {

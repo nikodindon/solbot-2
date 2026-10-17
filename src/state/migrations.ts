@@ -187,6 +187,20 @@ const MIGRATIONS: { version: number; name: string; sql: string }[] = [
       );
     `,
   },
+  {
+    // v3 : normalise candles_imported en ms. Les runs antérieurs au fix gecko ingestaient
+    // des ts SECONDES (< 1.2e10) ; le standard DB est ms. Test sans ambiguïté (< 4e10).
+    version: 3,
+    name: "candles-imported-ts-ms",
+    sql: `
+      -- dupes first: même seconde déjà importée en ms ultérieurement
+      DELETE FROM candles_imported WHERE ts < 40000000000 AND EXISTS (
+        SELECT 1 FROM candles_imported c2
+        WHERE c2.mint = candles_imported.mint AND c2.tf = candles_imported.tf AND c2.ts = candles_imported.ts * 1000
+      );
+      UPDATE candles_imported SET ts = ts * 1000 WHERE ts < 40000000000;
+    `,
+  },
 ];
 
 export function currentVersion(db: DB): number {

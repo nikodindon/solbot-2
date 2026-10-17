@@ -35,7 +35,7 @@ npm run backtest      # verdict en kv ; les 7 derniers jours exigés par la gard
 
 | Mode | Réseau Jupiter | Exécution | Capital |
 |---|---|---|---|
-| `paper` (défaut) | réel (taille de trade simulée, `paper_fill_slippage_bps`) | simulée | `paper_initial_usdc` |
+| `paper` (défaut) | réel (taille de trade simulée, `paper_fill_slippage_bps`) | simulée | `paper_initial_usdc` + wallet gaz `paper_initial_sol` (rent ATA remboursée au close) |
 | `demo` (CLI `--demo`) | aucun (marché synthétique GBM seedé) | simulée | même capital |
 | `dry_run` | réel | ordre construit mais **non signé** (signature évitée) | fictif |
 | `live` | réel | Meta-Aggregator (`/order` + `/execute`) | réel (wallet RPC) |

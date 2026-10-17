@@ -98,7 +98,15 @@ export async function runBacktest(srcDb: DB, cfg: AppConfig, deps: BacktestDeps 
           work,
           m,
           STRAT_TF,
-          rows.map((c) => ({ ts: c.ts, open: c.open, high: c.high, low: c.low, close: c.close, volume: c.volume_usd })),
+          rows.map((c) => ({
+            // défense pare-chocs: bougies seconds (runs antérieurs) → ms
+            ts: c.ts < 40_000_000_000 ? c.ts * 1000 : c.ts,
+            open: c.open,
+            high: c.high,
+            low: c.low,
+            close: c.close,
+            volume: c.volume_usd,
+          })),
         );
       }
     }
@@ -141,9 +149,10 @@ export async function runBacktest(srcDb: DB, cfg: AppConfig, deps: BacktestDeps 
 
     const equity = listEquity(work, 0).sort((a, b) => a.tsMs - b.tsMs || a.tickId - b.tickId);
     const navs = equity.map((e) => e.navUsd);
-    const initial = cfg.backtest.initial_usdc;
+    // NAV de départ réellement observée (inclut le wallet SOL gaz virtuel seedé)
+    const initial = navs.length > 0 ? navs[0] ?? cfg.backtest.initial_usdc : cfg.backtest.initial_usdc;
     const finalNav = navs.length > 0 ? navs[navs.length - 1] ?? initial : initial;
-    let peak = navs.length > 0 ? navs[0] ?? initial : initial;
+    let peak = initial;
     let maxDd = 0;
     for (const nav of navs) {
       if (nav > peak) {peak = nav;}

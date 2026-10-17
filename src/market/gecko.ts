@@ -153,7 +153,8 @@ export class GeckoBackfiller {
           (r[4] as number) > 0,
       );
       const candles = valid.map((r) => ({
-        ts: r[0] as number,
+        // GeckoTerminal renvoie des ts SECONDES ; la DB travaille en ms (cohérence candles/price_ticks)
+        ts: (r[0] as number) * 1000,
         open: r[1] as number,
         high: r[2] as number,
         low: r[3] as number,

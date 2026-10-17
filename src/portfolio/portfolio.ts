@@ -36,6 +36,8 @@ export interface SnapshotOpts {
   mode: string;
   /** paper cash (modes paper/dry_run) — in live, balances come from `balances` */
   paperCashUsdc: number;
+  /** wallet SOL gas virtuel en paper (hors positions tradables) */
+  paperSol?: number;
   /** live/dry balances (USDC units, SOL lamports) — null in paper */
   balances?: { usdc: number; solLamports: number; tokens: { mint: string; amount: number }[] } | null;
   solPrice: number;
@@ -57,6 +59,20 @@ export function paperCashSet(db: DB, v: number): void {
   kvSetJson(db, "paperCashUsdc", v);
 }
 
+/** Wallet SOL virtuel pour le gaz en paper (hors positions tradables). */
+export function paperSolGet(db: DB, initialSol: number): number {
+  const v = kvGetJson<number | null>(db, "paperSolBalance", null);
+  if (v === null) {
+    kvSetJson(db, "paperSolBalance", initialSol);
+    return initialSol;
+  }
+  return v;
+}
+
+export function paperSolSet(db: DB, v: number): void {
+  kvSetJson(db, "paperSolBalance", v);
+}
+
 /** Mark-to-market snapshot for both virtual (paper) and on-chain (live) portfolios. */
 export function buildSnapshot(db: DB, priceMap: Map<string, number>, opts: SnapshotOpts): PortfolioSnapshot {
   const risk = opts.risk;
@@ -68,8 +84,8 @@ export function buildSnapshot(db: DB, priceMap: Map<string, number>, opts: Snaps
     usdcCash = opts.balances.usdc;
     solSol = opts.balances.solLamports / LAMPORTS_PER_SOL;
   } else {
-    // in paper, SOL is a position in the book
-    solSol = positions.find((p) => p.mint === SOL_MINT)?.qty ?? 0;
+    // in paper, SOL is a position in the book + the virtual gas wallet
+    solSol = (positions.find((p) => p.mint === SOL_MINT)?.qty ?? 0) + (opts.paperSol ?? 0);
   }
 
   const solPrice = opts.solPrice;

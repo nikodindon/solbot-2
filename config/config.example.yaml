@@ -100,6 +100,7 @@ backtest:
   guard_require_positive_net_pnl: false
 
 paper_initial_usdc: 6       # caisse du portefeuille paper (le NAV réel reste visible au dashboard)
+paper_initial_sol: 0.05     # wallet SOL gaz virtuel en paper (frais déduits, rent ATA remboursée au close)
 
 demo:
   seed: 42

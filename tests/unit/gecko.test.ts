@@ -136,4 +136,20 @@ describe("GeckoBackfiller", () => {
     expect(await gecko.backfillToken(JUP, "15m", 7)).toBe(0);
     expect(reqs).toHaveLength(2);
   });
+
+  it("ts GECKO seconds → stockage ms (régression unité 24h)", async () => {
+    const nowSec = Math.floor(Date.now() / 1000);
+    const reqs: CapturedReq[] = [];
+    const fetch = scriptedFetch(
+      [
+        { status: 200, body: poolBody() },
+        { status: 200, body: ohlcvBody([[nowSec, 1, 1, 1, 1, 1]]) },
+      ],
+      reqs,
+    );
+    const gecko = new GeckoBackfiller(db, { ...geckoDefaults(), requestPauseMs: 2 }, fetch);
+    await gecko.backfillToken(JUP, "15m", 7);
+    const row = db.prepare("SELECT ts FROM candles_imported WHERE mint = ? LIMIT 1").get(JUP) as { ts: number };
+    expect(row.ts).toBeGreaterThan(1e12); // ms, pas secondes
+  });
 });

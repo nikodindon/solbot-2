@@ -1,6 +1,6 @@
 import type { DB } from "../state/db.js";
 import type { AppConfig, Mode } from "../config/schema.js";
-import { buildSnapshot, paperCashGet, benchmarkBuyHold } from "../portfolio/portfolio.js";
+import { buildSnapshot, paperCashGet, paperSolGet, benchmarkBuyHold } from "../portfolio/portfolio.js";
 import { listTrades, cumRealizedPnl, costBreakdown } from "../state/trades.js";
 import { listDecisions } from "../state/decisions.js";
 import { equityCount } from "../state/equity.js";
@@ -70,6 +70,7 @@ export function buildState(db: DB, cfg: AppConfig, mode: Mode, nowMs = Date.now(
   const snap = buildSnapshot(db, prices, {
     mode,
     paperCashUsdc: paperCashGet(db, cfg.paper_initial_usdc),
+    paperSol: paperSolGet(db, cfg.paper_initial_sol),
     balances: null,
     solPrice: prices.get(SOL_MINT) ?? 0,
     usdcPrice: prices.get(USDC_MINT) || 1,
