@@ -13,13 +13,16 @@ export interface PortfolioSnapshot {
   usdcBalanceUsd: number;
   solAboveReserveSol: number;
   swapsRemaining: number;
-  positions: {
-    mint: string;
-    symbol: string;
-    qty: number;
-    avgEntryUsd: number;
-    valueUsd: number;
+    positions: {
+      mint: string;
+      symbol: string;
+      qty: number;
+      avgEntryUsd: number;
+      markUsd: number;
+      valueUsd: number;
     unrealizedPnlUsd: number;
+    /** friction d'entrée: qty × (prix effectif − mid au moment du buy) ≈ −0.024$ par lot de 1$ */
+    entryFrictionUsd: number;
     peakPriceUsd: number | null;
     stopLossPrice: number | null;
     takeProfitPrice: number | null;
@@ -91,6 +94,21 @@ export function buildSnapshot(db: DB, priceMap: Map<string, number>, opts: Snaps
   const solPrice = opts.solPrice;
   const usdcPrice = opts.usdcPrice || 1;
   let positionsUsd = 0;
+  // friction d'entrée par position: (price_usd − expected_price_usd) du premier buy du mint
+  const buyFriction = db.prepare(
+    "SELECT price_usd, expected_price_usd, qty FROM trades WHERE mint = ? AND side = 'buy' AND ts_ms >= ? ORDER BY ts_ms ASC LIMIT 1",
+  );
+  const frictionFor = (p: { mint: string; openedMs: number }): number => {
+    try {
+      const row = buyFriction.get(p.mint, p.openedMs - 60_000) as
+        | { price_usd: number; expected_price_usd: number | null; qty: number }
+        | undefined;
+      if (!row || row.expected_price_usd === null) {return 0;}
+      return -row.qty * (row.price_usd - row.expected_price_usd);
+    } catch {
+      return 0;
+    }
+  };
   const out: PortfolioSnapshot["positions"] = [];
   for (const p of positions) {
     if (p.mint === SOL_MINT && !isLive) {
@@ -105,8 +123,10 @@ export function buildSnapshot(db: DB, priceMap: Map<string, number>, opts: Snaps
       symbol: p.symbol,
       qty: p.qty,
       avgEntryUsd: p.avgEntryUsd,
+      markUsd: price,
       valueUsd: value,
       unrealizedPnlUsd: value - p.investedUsd,
+      entryFrictionUsd: frictionFor(p),
       peakPriceUsd: p.peakPriceUsd,
       stopLossPrice: p.stopLossPrice,
       takeProfitPrice: p.takeProfitPrice,

@@ -1,4 +1,7 @@
 import { describe, expect, it } from "vitest";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { loadConfig, parseConfigRaw } from "../../src/config/loader.js";
 import { effectiveMode } from "../../src/config/schema.js";
 
@@ -40,7 +43,11 @@ describe("config", () => {
 
   it("loader yaml de l'exemple (sans pollution d'env vitest)", () => {
     delete process.env.MODE;
-    const loaded = loadConfig({ rootDir: process.cwd() });
+    // racine temporaire contenant uniquement config.example.yaml (un config.yaml local ne doit pas casser ce test)
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "cfg-example-"));
+    fs.mkdirSync(path.join(tmp, "config"));
+    fs.copyFileSync(path.join(process.cwd(), "config", "config.example.yaml"), path.join(tmp, "config", "config.example.yaml"));
+    const loaded = loadConfig({ rootDir: tmp });
     expect(loaded.mode).toBe("paper");
     expect(loaded.usedExample).toBe(true);
   });

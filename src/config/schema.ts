@@ -15,7 +15,7 @@ export const universeSchema = z
           decimals: z.number().int().min(0).max(18),
         }),
       )
-      .max(5)
+      .max(20)
       .default([
         { mint: "JUPyiwrYJFskUPiHa7hkeR8VUtAeFoSYbKedZNsDvCN", symbol: "JUP", decimals: 6 },
         { mint: "DezXAZ8z7PnrnRJjz3wXBoRgixCa6xjnB7YaB1pPB263", symbol: "BONK", decimals: 5 },

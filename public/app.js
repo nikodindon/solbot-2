@@ -21,8 +21,21 @@ function renderState(s) {
   $("dd").className = dd >= 30 ? "neg" : "";
   $("realized").textContent = fmtUsd(s.nav.realizedTotalUsd);
   $("realized").className = s.nav.realizedTotalUsd >= 0 ? "pos" : "neg";
-  $("swaps").textContent = String(s.nav.swapsRemaining);
-  $("alloc").textContent = s.allocation.strategy ?? "—";
+  $("swept").textContent = fmtUsd(s.nav.sweptUsd ?? 0, 2);
+  $("wealth").textContent = fmtUsd((s.nav.usd ?? 0) + (s.nav.sweptUsd ?? 0), 2);
+  if (s.scalper) {
+    const swapsKpi = document.getElementById("swaps").parentElement;
+    swapsKpi.querySelector("label").textContent = "Takes réalisés";
+    $("swaps").textContent = `${s.scalper.takes} / ${fmtUsd(s.scalper.takeUsd, 2)}`;
+    $("swaps").title = s.scalper.purges ? `${s.scalper.purges} lots purgés (rug/moon/idle/dead)` : "";
+    const allocKpi = document.getElementById("alloc").parentElement;
+    allocKpi.querySelector("label").textContent = "En jeu";
+    $("alloc").textContent = `${s.scalper.expoPct}%`;
+    $("alloc").title = `expo ${fmtUsd(s.scalper.expoUsd, 2)}$ / fortune ${fmtUsd(s.scalper.expoUsd + (s.nav.sweptUsd ?? 0), 2)}$`;
+  } else {
+    $("alloc").textContent = s.allocation.strategy ?? "—";
+    $("swaps").textContent = String(s.nav.swapsRemaining);
+  }
   const bhDur = s.benchmarks.bhUsd - s.nav.initialCapitalUsd;
   $("bh").textContent = fmtUsd(s.benchmarks.bhUsd, 2);
   $("bh").title = `Δ vs initial: ${fmtUsd(bhDur)}`;
@@ -57,18 +70,24 @@ function renderGuards(g) {
   $("guards").querySelector("tbody").innerHTML = rows.map((r) => `<tr><td>${r[0]}</td><td>${r[1]}</td></tr>`).join("");
 }
 
+function fmtPrice(v) {
+  if (!(v > 0)) {return "—";}
+  return v >= 0.01 ? `$${v.toPrecision(6)}` : `$${v.toExponential(2)}`;
+}
+
 function renderPositions(ps) {
   const tb = $("positions").querySelector("tbody");
-  if (!ps.length) { tb.innerHTML = `<tr><td colspan="7" style="color:var(--dim)">aucune position</td></tr>`; }
+  if (!ps.length) { tb.innerHTML = `<tr><td colspan="8" style="color:var(--dim)">aucune position</td></tr>`; }
   else {
     tb.innerHTML = ps.map((p) => {
       const stops = [p.stopLossPrice ? `SL ${p.stopLossPrice.toPrecision(4)}` : null, p.takeProfitPrice ? `TP ${p.takeProfitPrice.toPrecision(4)}` : null, p.trailingStopPrice ? `TS ${p.trailingStopPrice.toPrecision(4)}` : null].filter(Boolean).join(" · ") || "—";
       return `<tr>
         <td>${symFix(p.symbol)}</td>
         <td>${p.qty.toPrecision(6)}</td>
-        <td>${fmtUsd(p.avgEntryUsd, 4)}</td>
+        <td>${fmtPrice(p.avgEntryUsd)}</td>
+        <td>${fmtPrice(p.markUsd)}</td>
         <td>${fmtUsd(p.valueUsd, 2)}</td>
-        <td class="${p.unrealizedPnlUsd >= 0 ? "pos" : "neg"}">${fmtUsd(p.unrealizedPnlUsd)}</td>
+        <td class="${p.unrealizedPnlUsd >= 0 ? "pos" : "neg"}">${fmtUsd(p.unrealizedPnlUsd)}${p.entryFrictionUsd ? `<div class="dim">${fmtUsd(p.entryFrictionUsd)} friction</div>` : ""}</td>
         <td>${stops}</td>
         <td>${agoOf(Date.now() - p.ageMs)}</td>
       </tr>`;

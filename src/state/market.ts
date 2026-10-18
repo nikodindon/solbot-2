@@ -7,6 +7,8 @@ export interface Tick {
   price: number;
   liquidity: number | null;
   volumeDelta: number | null;
+  /** origine du prix: découverte (fair quotes) ou ►chandelle OHLCV pool (peut être une mule pumpée) */
+  src?: "discovery" | "candle";
 }
 
 export interface Candle {
@@ -75,21 +77,37 @@ export function getTokenMeta(db: DB, mint: string): AssetMeta | null {
 
 export function insertTicks(db: DB, ticks: Tick[]): void {
   const stmt = db.prepare(
-    `INSERT INTO price_ticks (ts_ms, mint, price_usd, liquidity_usd, volume_delta_usd)
-     VALUES (?, ?, ?, ?, ?)
+    `INSERT INTO price_ticks (ts_ms, mint, price_usd, liquidity_usd, volume_delta_usd, src)
+     VALUES (?, ?, ?, ?, ?, ?)
      ON CONFLICT(ts_ms, mint) DO UPDATE SET
        price_usd = excluded.price_usd,
        liquidity_usd = excluded.liquidity_usd,
-       volume_delta_usd = COALESCE(excluded.volume_delta_usd, price_ticks.volume_delta_usd)`,
+       volume_delta_usd = COALESCE(excluded.volume_delta_usd, price_ticks.volume_delta_usd),
+       src = excluded.src`,
   );
   tx(db, () => {
-    for (const t of ticks) {stmt.run(t.ts, t.mint, t.price, t.liquidity, t.volumeDelta);}
+    for (const t of ticks) {stmt.run(t.ts, t.mint, t.price, t.liquidity, t.volumeDelta, t.src ?? "discovery");}
   });
 }
 
+/** dernier prix discovery (source = feed, fair): contexte de garde pour les ventes du scalpeur. */
+export function latestDiscoveryTick(db: DB, mint: string): { tsMs: number; price: number; liquidityUsd: number | null } | null {
+  const row = db
+    .prepare("SELECT ts_ms, price_usd, liquidity_usd FROM price_ticks WHERE mint = ? AND src = 'discovery' AND liquidity_usd > 0 ORDER BY ts_ms DESC LIMIT 1")
+    .get(mint) as { ts_ms: number; price_usd: number; liquidity_usd: number | null } | undefined;
+  return row ? { tsMs: row.ts_ms, price: row.price_usd, liquidityUsd: row.liquidity_usd } : null;
+}
+
+
+export function latestTickAnyAge(db: DB, mint: string): { tsMs: number; price: number; src?: "discovery" | "candle" } | null {
+  const row = db
+    .prepare("SELECT ts_ms, price_usd, src FROM price_ticks WHERE mint = ? ORDER BY ts_ms DESC LIMIT 1")
+    .get(mint) as { ts_ms: number; price_usd: number; src: string } | undefined;
+  return row ? { tsMs: row.ts_ms, price: row.price_usd, src: row.src === "candle" ? "candle" : "discovery" } : null;
+}
+
 /** Last tick per mint (latest ts). */
-export function latestTicks(db: DB, ts: number, ms: number): Tick[] {
-  const rows = db
+export function latestTicks(db: DB, ts: number, ms: number): Tick[] {  const rows = db
     .prepare(
       `SELECT ts_ms, mint, price_usd, liquidity_usd, volume_delta_usd
        FROM price_ticks WHERE ts_ms >= ? AND ts_ms <= ? GROUP BY mint

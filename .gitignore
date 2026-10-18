@@ -7,3 +7,6 @@ coverage/
 STOP
 .DS_Store
 config/config.local.yaml
+secrets/
+results/archive/
+config/config.yaml

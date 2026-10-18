@@ -7,6 +7,8 @@ import { runStart } from "./cli/start.js";
 import { runDoctor } from "./cli/doctor.js";
 import { runBalance } from "./cli/balance.js";
 import { runBacktestCmd } from "./cli/backtest.js";
+import { runGmgn } from "./cli/gmgn.js";
+import { runMaxscalp } from "./cli/maxscalp.js";
 
 // .env → process.env (process.env garde la priorité, standard dotenv)
 const envLoaded = loadEnv(process.cwd());
@@ -61,6 +63,22 @@ program
       console.log(`${c.ok ? "✔" : "✘"} ${c.name.padEnd(16)} ${c.detail}`);
     }
     if (!res.ok) {process.exitCode = 1;}
+  });
+
+program
+  .command("gmgn")
+  .description("scalper paper dédié (discover + TP/SL rapides) — DB data/gmgn.sqlite, dashboard :4101")
+  .option("--once", "un seul tick puis exit", false)
+  .action(async (opts) => {
+    await runGmgn({ once: opts.once === true });
+  });
+
+program
+  .command("maxscalp")
+  .description("loterie paper: 1$ sur tout le discovery, takes ladder à chaque x2, pas de SL — DB data/maxscalp.sqlite, dashboard :4102")
+  .option("--once", "un seul tick puis exit", false)
+  .action(async (opts) => {
+    await runMaxscalp({ once: opts.once === true });
   });
 
 program

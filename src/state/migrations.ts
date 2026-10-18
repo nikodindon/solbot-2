@@ -201,6 +201,13 @@ const MIGRATIONS: { version: number; name: string; sql: string }[] = [
       UPDATE candles_imported SET ts = ts * 1000 WHERE ts < 40000000000;
     `,
   },
+  {
+    version: 4,
+    name: "price-ticks-src",
+    sql: `
+      ALTER TABLE price_ticks ADD COLUMN src TEXT NOT NULL DEFAULT 'discovery';
+    `,
+  },
 ];
 
 export function currentVersion(db: DB): number {

@@ -32,6 +32,7 @@ header { display: flex; align-items: center; justify-content: space-between; mar
 .kpi small { color: var(--dim); font-size: 11px; }
 .pos { color: var(--good)!important; }
 .neg { color: var(--bad)!important; }
+td .dim { color: var(--dim); font-size: 10px; }
 .grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 12px; }
 .card { background: var(--panel); border: 1px solid var(--border); border-radius: 10px; padding: 12px; }
 .span-2 { grid-column: span 2; }

@@ -17,6 +17,8 @@
     "demo": "tsx src/index.ts demo",
     "doctor": "tsx src/index.ts doctor",
     "backtest": "tsx src/index.ts backtest",
+    "gmgn": "tsx src/index.ts gmgn",
+    "maxscalp": "tsx src/index.ts maxscalp",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "test:watch": "vitest",

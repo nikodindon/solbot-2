@@ -2,14 +2,14 @@ import http from "node:http";
 import fs from "node:fs";
 import path from "node:path";
 import type { DB } from "../state/db.js";
-import type { AppConfig, Mode } from "../config/schema.js";
-import { buildState, equitySeries, tradeList, decisionList, shadowOverview } from "./state.js";
+import type { AppConfig } from "../config/schema.js";
+import { buildState, type DashMode, equitySeries, tradeList, decisionList, shadowOverview } from "./state.js";
 import { kvGetJson } from "../state/kv.js";
 
 export interface DashboardDeps {
   db: DB;
   cfg: AppConfig;
-  mode: Mode;
+  mode: DashMode;
   rootDir: string;
   skipTokenCheck?: boolean; // unit tests
 }

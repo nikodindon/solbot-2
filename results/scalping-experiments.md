@@ -1,0 +1,205 @@
+# Scalping Solana — Journal d'expériences (paper)
+
+Deux bots scalpeurs en paper trading tournent séparément du bot principal (`:4100`) :
+
+| Bot | Port | DB | Philosophie |
+|---|---|---|---|
+| `gmgn` | :4101 | `data/gmgn.sqlite` | snipe discovery + TP 2.5% / SL 1.8% / time-stop 45 min |
+| `maxscalp` | :4102 | `data/maxscalp.sqlite` | **loterie ×2** : pas de SL, take ladder progressif, free ride |
+
+Lancement : `npm run gmgn` / `npm run maxscalp` (tsx, budget paper 100$ chacun, frais paper 2% (200 bps), slippage 250 bps).
+Stop propre : créer `data/STOP` (gmgn) ou `data/STOP_MAXSCALP` ; le process sort au prochain tick.
+
+---
+
+## Timeline des ajustements
+
+### Run 0 — gmgn scalper (classique TP/SL) — RÉSULTAT : FUITE UNIVERSELLE
+- 8 snipes réels sur discovery live : **tous stop loss**, −12.45$ (NAV 100 → 84.45 à l'arrêt, kill journalier déclenché).
+- Constat : les tokens les plus chauds du marché font **toujours** un dip > 2% avant de pump → un TP 2.5% / SL 1.8% en SNAPVEUR à −12.45$ par 8 trades, il ne peut pas tenir compte du bruit de la volatilité des mèmes.
+- **Leçon** : ce ratio TP/SL est invendable sur de la détention de quelques minutes → passer à la philosophie « pas de SL, ladder de takes » (maxscalp).
+
+### Run 1 — maxscalp loterie v1 (14:49 → 15:40 UTC 2026-10-17, ~56 min)
+
+**Config v1** (`maxscalpDefaults()`) :
+- 1$ / lot sur tout candidat discovery (liq ≥ 5000$, âge ≥ 2 min, cooldown 60 s, tick 15 s)
+- ×2 → take 1.2$ cash ; chaque nouveau ×2 du sol → take 20% du sol ; sinon **free ride sans stop**
+- 64 lots, 54 positions, cash 45.55$ in fine
+
+**Résultats** :
+- Réalisé sur trades : **−2.84$** (takes au cash +7.28$, rugues d'avant-garde −10.1$)
+- Positions ouvertes mark-to-market : +8.2$
+- Net théorique ≈ +5.4$ ; NAV affichée 94.63$ (sous-valorisée par les marks à l'entrée tant que le feu tournant n'a pas re-pricé)
+- Distribution : ~55% des lots plats, ~25% rugues (−0.96$), ~20% pumps — **3 winners portent tout le run** :
+
+| Token | PnL total | Détail |
+|---|---|---|
+| ETF | **+5.22$** | 2 takes n°1 + 2 takes ladder n°2, lot ×3 en cours |
+| Solcasino (×6.85) | +2.24$ | 1 rug purgé + moon ride ×6.85, take 0.92$ cash, sol ~4.6$ |
+| SOT | +1.81$ | take +0.77$ + sol courir |
+| TRUMP | +1.75$ | take +0.51$ + variantes plats |
+| Nought | +1.17$ | take +0.56$ + sol ×2.35 |
+
+Perdants type : ruggés −0.96$ (Aloooong, Claude AI, BUILD, STEVEN, LOCKIN, ETF500 ×2, ELONCOIN…).
+
+**Failles observées** (→ corrections ci-dessous) :
+1. Les floats gagnants redescendent sans filet (Solcasino mark 4.78e-4 → 3.60e-4, −25% du peak en quelques minutes) : du profit non verrouillé s'évapore.
+2. Cumul de variants du même nom : 4 lots « Solcasino », 6 « TRUMP » → corrélation perdante sur un même nom de famille.
+
+### Fixes d'infrastructure (même session)
+- SSE du dashboard : le state n'était émis qu'au boot → chaque tick broadcast `state` dans `src/cli/{gmgn,maxscalp}.ts`.
+- NAV vaporisée : `buildState` valorisait les positions sans tick récent au prix d'entrée → fallback `listPositions` + `avgEntryUsd` (`src/dashboard/state.ts`).
+- Discovery gecko : `include=base_token,dex` + mapping `relationships.base_token.data.id` → `included[]` (le `base_token` n'est sinon jamais résolu), `minAgeMin` 3 → 2.
+- Feu tournant `rotateMarks` : 5 positions/tick re-pricées par OHLCV 1m (`feed.latestCandle`), oldest-first via map `markCursor` — re-price ~5 lots/min sur 54 lots, sinon rien ne bouge jamais.
+- Anti-trap stables : `maxPriceUsd 0.05` (aucune entrée si le listing cote > 5¢).
+- Purge anti-rug `rugExitPct 0.6` : lot jamais profitable dont le mark tombe ≤ 60% de l'entrée → dump complet (sauve ~40% du coût au lieu de tenir jusqu'à ×0.01).
+- Pré à l'usage concret : paper fees 200 bps + slippage 250 bps calibrés sur fills réels v1.
+
+### Run 2 — maxscalp v2 : moon stop + cap familles (lancé 15:44 UTC)
+
+Deux nouvelles règles dérivées des failles du run 1 :
+
+1. **Moon stop** (`moonStopDropPct: 0.6`) : un lot déjà profité (takes ≥ 1) qui retombe à ≤ 40% de son *pic de valeur* post-take → on liquide **tout le sol**. C'est un stop glissant sur profit exclusivement — le coût initial reste déjà remboursé par le take n°1. Va et vient entre free ride et verrouillage : le sol court tant qu'il fait de nouveaux plus-hauts, purge s'il retourne au nivellement.
+2. **Cap familles** (`maxLotsPerSymbol: 2`) : max 2 lots simultanés partageant le même nom (variantes Solcasino/TRUMP dupliquées). Réduit les corrélations perdantes, élargit le tirage aux autres noms.
+
+`LadderState` gagne `peakUsd` (persisté kv `maxscalpLadder`), suivi dans le tick principal **et** dans le feu tournant `rotateMarks`.
+
+**Tests unitaires (11 sur maxscalp, 112 au total)** :
+- take n°1 = 1.2$ encaissés, sol libre de tout stop en montée
+- ladder : 20% du sol prélevés à chaque ×2 consécutif
+- rug exit purge le lot jamais profitable ≤ 60% d'entrée
+- **moon stop purge le sol à −70% du peak** (take + purge = 2 sells, position fermée)
+- le rug exit **ne** purge pas un lot profité mais le moon stop prend le relais
+- cap familles : 2 lots « MAX » pré-existants → 3e refusé ; un nouveau nom passe
+- filtre `maxPriceUsd` : listing > 5¢ refusé
+
+Premier tick post-relance : NAV 99.32$, cash 47.77$, 55 positions revalorisées, univers live. Le moon stop et le cap sont actifs à partir de maintenant — à réévaluer dans ~1 h.
+
+### Run 2 — bilan (15:44 → 18:52 UTC, ~3 h, maxscalp v2 moon stop + cap)
+
+Config v2 = v1 + moonStopDropPct 0.6 + maxLotsPerSymbol 2.
+
+| | |
+|---|---|
+| Buys | 96 lots (~96$ bruts) |
+| Sells | 38 (tous sens confondus : takes, rug exit, moon stop) |
+| Realized close | **−2.38$** |
+| Positions à l'arrêt | 79 lots, 72.81$ investi |
+| NAV fin | **93.86$** (dash, marks partiels) — environ −6% sur 3 h |
+
+Interprétation : le cap familles a cassé la dynamique des variants gagnants (ETF/TRUMP/Solcasino cumulaient +9$ au run 1 grâce aux re-buys du même nom), tandis que le moon stop coupait le free ride trop tôt sur les pumps qui continuent après une respiration > −40%. Résultat net : **moins de profit pris bas et moins de re-exposition gagnante**. V2 > v1 n'est pas acquis — run 1 (~56 min) était +5% vs run 2 (−6% sur 3 h).
+
+Décision : repartir à zéro (100$, 0 position) avec **v3** (run 3).
+
+### Run 3 — maxscalp v3 : sweep USDT + recycle cash (lancé 19:00 UTC, DB vierge)
+
+Deux règles ajoutées :
+1. **Sweep sécurisation** (`sweepTriggerUsd: 102`, `sweepUsd: 2`) : dès que le NAV du bot dépasse 102$, on sort systématiquement 2 USDT du wallet du bot (avant de les transférer via `paperCashSet`, compteur cumulative kv `maxscalpSweptUsd`) → le capital en jeu repart vers ~100$ et le gain se verrouille hors marché.
+2. **Recycle cash** : si le cash du bot tombe sous le budget d'achat (1.05$), on liquide 50% de chaque position **en profit** (mark > PA, strict), les plus anciennes d'abord, jusqu'à re-créditer le budget d'achat → le bot ne reste jamais à court de munitions tant qu'il y a des gagnants. Les lots en perte ne sont jamais touchés, la loterie reste gratuite/hold.
+3. (Passage) Raisons des sells nommées explicitement : `rug exit`, `moon stop`, `recycle cash`, `take ladder x2 n°x` (avant tout était « take ladder » dans le journal).
+
+Ordre d'activation dans un tick : moon stop/rug/recycle ladder → sweep NAV → recycle cash → entrées 1$.
+
+**Tests (14 sur maxscalp, 115 au total, tsc/eslint verts)** :
+- sweep : NAV > trigger → 2$ sortis, cash < 99.3, compteur kv = 2 ; NAV < trigger au tick suivant → pas de double sweep
+- recycle : 2 lots en profit, cash à 0 → 2 sells `recycle cash` oldest-first (OTHX puis MAX), puis nouvelle entrée faite
+- recycle : lot en perte → aucune purge
+- + tous les tests v1/v2 (11) 
+
+Premier tick : NAV 99.64$, 6 lots, univers 6 candidats.
+
+### Run 3 — bilan nocturne (19:00 UTC → 06:49, ~13 h) : blocage du cap 90
+
+| | |
+|---|---|
+| Buys | 90 lots (cap maxPositions=90 atteint, saturé) |
+| Sells | 2 (1 take ladder ×2, 1 rug exit) |
+| Realized close | **+1.34$** |
+| NAV fin | **101.43$** (+1.4%, friction −2.4%/lot incluse) |
+
+Le trou noir : **90/90 slots remplis → plus aucune entrée** depuis des heures. La boucle d'entrées `break` dès que `positions ≥ maxPositions`, et rien ne libère les slots qu'à un ×2 (rares) ou un rug. Le bot est resté spectateur toute la fin de nuit.
+
+Leçon : la loterie a besoin de **churn**. Sans purge mécanique des plats, le cap devient un plafond à une seule impulsion.
+
+### Run 3' — maxscalp v4 : idle exit (churn) + friction affichée
+
+Nouvelle règle (demandée niko) : quand les vieux lots sont **plats** et **sans volume**, les fermer oldest-first pour continuer à acheter les nouveaux :
+
+1. **Idle exit** : lot dont (a) âge ≥ 30 min `idleExitMinAgeMin`, (b) `|pnl| ≤ 0.08$` `idleExitPnlUsd` (la friction d'entrée −0.024$ reste dans la bande), (c) token absent de la discovery ≥ 30 min `idleExitNoVolMin` (tracking kv `maxscalpSeenAt`, prune 24h) → **purge complète** (reason `idle exit`), oldest-first, **max 5 purges/tick** `maxIdlePurgesPerTick`, uniquement lorsque le cap est atteint (mode slots).
+2. **Recycle cash** étendu : toujours short après les winners → fallback purge idle (mode cash).
+3. **Option A (friction affichée)** : chaque position expose `entryFrictionUsd = −qty × (prix effectif − mid du buy)` (≈ −0.024$) ; dashboards affichent le PnL mtm + « dont friction » (comptabilité inchangée, lecture claire).
+
+Ordre du tick : ladder (takes/rug/moon) → **purgeIdle** → sweep 102$ → recycle cash → entrées 1$.
+
+**Tests (17 sur maxscalp, 118 au total)** : purge au cap (5 purged oldest-first, slot re-acheté), épargne des gagnants / token vu récemment / lot frais, friction exacte depuis le buy réel.
+
+Restart à chaud (sans reset DB) → le churn prend la main sur les 90 lots plats de la nuit dans les premiers ticks.
+
+### Run 3'' — maxscalp v5 : zone d'exclusion des rugs
+
+Règle anti-re-rug (demandée niko) : quand un coin rugue (purge `rug exit`, mark ≤ 60% de l'entrée, jamais profité), son **ticker exact** est mis en zone d'exclusion (kv `maxscalpRugTickers`). Tout listing futur portant ce même ticker exact est refusé (log `reject`) — les mèmes dupliqués (SOLCASINO ×4, TRUMP ×6 au run 1) ne bouffent plus de munitions.
+
+N'est PAS blacklisté : moon stop (lot profité), idle exit, recycle cash — uniquement la purge rug.
+Permanence dans la session (pas de TTL).
+
+**Tests (19 sur maxscalp, 120 au total)** : rug → exclusion (helper `blacklistRug`, re-achat refusé, autre ticker acheté), moon stop → pas d'exclusion.
+
+### Run 3 — bilan final (16 h, v3→v5) : le NAV nocturne était fictif
+
+| | |
+|---|---|
+| NAV finale | **69.67$** (realized −24.10$ sur 126 sells, 159 lots achetés) |
+| Take ladder | **+14.6$** sur 17× — le seul moteur positif |
+| Rug exits | −34.6$ sur 43× (95% des pertes, déferlante post-restart(churn)) |
+| Idle exits | −2.6$ sur 25× (neutre/friction) |
+| Sweep 102$ | jamais déclenché |
+| Exclusion zone | 32 tickers |
+
+Le plateau NAV 101.4$ exactement pendant 6 h de nuit = **marks gelés** (feu tournant OHLCV sans données) — le churn a ensuite révélé la vérité : une grande partie des lots déjà ruggés. Deux fautes comptables ont masqué les pertes :
+1. Les sells sur marks priés au prix d'entrée (fallback) créaient du cash de fiction.
+2. Le churn purgeait sur des marks fictifs juste après un restart.
+
+Leçon majeure : **pas de vente sur un mark qui n'est pas frais** — sinon le paper book s'auto-illusionne.
+
+### Run 4 — maxscalp v6 : anti-fiction comptable + warmup
+
+Base vierge (100$, 0 position), deux garde-fous de vérité :
+1. **Sell interdit sur mark pas frais** (`sellMarkFreshS 300`) : take ladder / rug exit / moon stop / idle / recycle ne s'exécutent que si le prix source a <5 min (discovery snapshot, OHLCV 1m ou tick récent). Les appels constatent l'âge de la source (`priceWithAge`) — plus jamais d'entrée contrôlée à x1.025 côté vente.
+2. **Dead listing purge** (`deadLotMinAgeMin 60`, `deadHaircutPct 0.5`) : lot sans mark frais depuis ≥60 min → vendu au **dernier prix connu** (peu importe son âge) ou, faute de tout prix, **amorti à −50% du coût** — jamais au prix d'entrée. Raison `dead exit`.
+3. **Warmup au boot** : `repriceAll()` re-pricé 100% des positions via OHLCV (80 ms/mint) AVANT le premier tick de churn — plus de déferlante de purges sur des marks morts.
+
+`priceOf` passe sur une cascade honnête : snapshot discovery (frais) → dernier tick connu en DB (âge mesuré) → prix d'entrée (marqué fictionnel, vendable jamais).
+
+**Tests (22 sur maxscalp, 123 au total)** : rug sans mark frais → aucun sell ; dead exit au dernier prix connu (0.004$ ≠ 0.01$ entrée) ; dead exit amputé à 50% sans aucun prix ; repriceAll OK.
+
+### Run 4 bis — crash de la comptabilité : la fausse lune de NIVRA (→ v7)
+
+~5 h30 dans le run, NIVRA (1$ investi, entrée 8.39e-9) a vu son pool **relancé par le dev** : la bougie OHLCV (pool `6igB4b…`, réserve ~104$, FDV 42.8k$) cote le mark ×5225 l'entrée (4.28e-5). Effet dominos ferme:
+1. Ladder + `recycle cash` "réalisent" sur ce mark : **un sell de `recycle cash` matérialise 2229$ de cash papier** (0.48$ de stake liquidé ×4600), mucron ×28 et 安安 dans la même vague (même mécanisme) ;
+2. le NAV s'emballe → sweep 60$ (30 × 2$), part sur des gains fictifs ;
+3. NAV affiché 4736$ = 2205$ cash fictif + NIVRA "valeur" 2459$.
+
+**Leçon v6 n'était pas suffisante** : la garde « mark frais » ne sauve pas d'un mark frais émanant d'une pool-mule — la fraîcheur n'est pas la légitimité.
+
+**v7 — garde anti-fausse lune** :
+1. **Migration `price_ticks.src`** ('discovery' | 'candle') : l'origine de chaque tick est tracée en DB. Les ventes "candle-sourced" sont les seules contraintes par le contrôle de cohérence.
+2. **`priceWithAge`** cap les ventes (et le sizing du ladder/NAV) : bougie > `maxCandleJump 4` × dernier liquide connu discovery → le prix retourné devient ce dernier prix discovery ; clamp dur **`maxEntryMultiple 20`** : aucun « gain » >20× l'entrée ne compte (le paper ignore la fiction au-delà).
+3. **`partialSell.sellPriceGuard` double sécurité** : même si un prix brut s'infiltre (rotate bar.close), la vente est clampée au même régime.
+4. **`simulateSell` profondeur**: `liquidityUsd` pool = dernier liquide discovery connu (sinon `minLiquidityUsd 5000$`) — plus de liquidité auto-référentielle `sellQty×price` (le pool ne rétrécit pas parce qu'on vend).
+
+**Tests (25 maxscalp, 126 total)** : NIVRA ×5225 → vente au prix discovery, pas de cash fiction ; bougie légitime ×2.1 → honorée ; candle ×10 000 sans discovery → clamp entry×20 ; chain x2 inchangée (les doubles légitimes passent à travers le guard).
+
+---
+
+## Leçons générales (running notes)
+
+- Sur les mèmes neufs, **le stop loss classique est le pire geste** : le bruit dip > tout ROI de 2 min. Mieux vaut un filet de purge « rug » (−40%) + verrouiller du profit par prélèvements échelonnés.
+- L'impact des frais paper (2%) + slippage (2.5%) : chaque lot paye ~4.5% → un ×2 réel exige un pump ≈ ×1.09 avant de « payer ». Les takes à 1.2$ d'un lot ×2 couvrent ainsi ~2× le coût du lot — les chiffres ci-dessus les incluent déjà.
+- Le dashboard est le juge de paix : NAV, trade journal, big-losers/rug table — regarder `localhost:4102` pour les stats, `localhost:4101` pour le comparatif de stratégie.
+- Un run de 56 min n'est **pas** une conclusion statistique — itérer jusqu'à ce que plusieurs runs de 2 h+ concordent avant de laisser tourner la nuit.
+
+## Prochaines expériences candidates (à arbitrer après le run 2)
+
+1. Recyclage des plats : lots > 45 min et −20~−40% ni rug ni pump → sortie douce pour recycler le cash (vs laisser pourrir).
+2. Anti-rug d'entrée agressif : refuser les listings avec volume/pool asymétrique (cf. gecko bars) — à tester si la purge τ40% n'est pas suffisante.
+3. Double anti-Solcasino : détection « même nom, plusieurs mints distincts » (les 4 Solcasino du run 1 sont 4 mints différents — la famille ne se réfpre pas maintenant craqués par cap nom).

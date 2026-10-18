@@ -5,6 +5,7 @@ import { listTrades, cumRealizedPnl, costBreakdown } from "../state/trades.js";
 import { listDecisions } from "../state/decisions.js";
 import { equityCount } from "../state/equity.js";
 import { latestTicks } from "../state/market.js";
+import { listPositions } from "../state/portfolio-repo.js";
 import { kvGetJson } from "../state/kv.js";
 import { tradeCount } from "../state/trades.js";
 import fs from "node:fs";
@@ -14,7 +15,7 @@ import { SOL_MINT, USDC_MINT } from "../constants.js";
 export interface DashboardState {
   tsMs: number;
   clock: { tickId: number; intervalS: number };
-  mode: Mode;
+  mode: string;
   fresh: boolean;
   nav: {
     usd: number;
@@ -25,6 +26,8 @@ export interface DashboardState {
     initialCapitalUsd: number;
     navPeakUsd: number;
     swapsRemaining: number;
+    /** montant USDT sécurisé côté (hors NAV) — sweep du scalpeur */
+    sweptUsd: number;
   };
   portfolio: {
     positions: {
@@ -32,8 +35,10 @@ export interface DashboardState {
       symbol: string;
       qty: number;
       avgEntryUsd: number;
+      markUsd: number;
       valueUsd: number;
       unrealizedPnlUsd: number;
+      entryFrictionUsd: number;
       stopLossPrice: number | null;
       takeProfitPrice: number | null;
       trailingStopPrice: number | null;
@@ -42,6 +47,14 @@ export interface DashboardState {
     costs: { jupFeeUsd: number; solFeeUsd: number; ataRentUsd: number; realizedSlippageUsd: number };
   };
   allocation: { strategy: string | null; sinceMs: number | null };
+  /** mode maxscalp: stats propres au scalpeur (les KPI génériques swaps/alloc n'ont pas de sens) */
+  scalper?: {
+    takes: number;
+    takeUsd: number;
+    purges: number;
+    expoUsd: number;
+    expoPct: number;
+  };
   guards: {
     stopFile: boolean;
     killSwitchAtMs: number | null;
@@ -55,11 +68,17 @@ export interface DashboardState {
 }
 
 /** Read-only API state (documented contract of /api/state) — no secrets. */
-export function buildState(db: DB, cfg: AppConfig, mode: Mode, nowMs = Date.now()): DashboardState {
+export type DashMode = Mode | "maxscalp";
+
+export function buildState(db: DB, cfg: AppConfig, mode: DashMode, nowMs = Date.now()): DashboardState {
   const prices = new Map<string, number>();
   const ticks = latestTicks(db, nowMs, 120_000);
   for (const t of ticks) {
     prices.set(t.mint, t.price);
+  }
+  // positions ouvertes sans tick récent (tokens rotés par la discovery): valorisées au prix d'entrée sinon NAV vaporisée
+  for (const p of listPositions(db, true)) {
+    if (!prices.has(p.mint)) {prices.set(p.mint, p.avgEntryUsd);}
   }
   const mints = cfg.universe.tokens.map((t) => t.mint);
   for (const t of cfg.universe.tokens) {
@@ -102,12 +121,14 @@ export function buildState(db: DB, cfg: AppConfig, mode: Mode, nowMs = Date.now(
       initialCapitalUsd: snap.initialCapitalUsd,
       navPeakUsd: snap.navPeakUsd,
       swapsRemaining: snap.swapsRemaining,
+      sweptUsd: kvGetJson<number>(db, "maxscalpSweptUsd", 0),
     },
     portfolio: {
       positions: snap.positions,
       costs: costBreakdown(db),
     },
     allocation: { strategy: alloc, sinceMs: allocSince },
+    scalper: mode === "maxscalp" ? scalperStats(db, snap.navUsd, snap.positionsUsd) : undefined,
     guards: {
       stopFile: fs.existsSync(path.join(process.cwd(), "data", "STOP")),
       killSwitchAtMs: kill,
@@ -227,4 +248,24 @@ export function shadowOverview(db: DB, nowMs = Date.now()): {
       allocated: alloc === null ? null : alloc === r.shadow,
     };
   });
+}
+
+function scalperStats(db: DB, navUsd: number, positionsUsd: number): {
+  takes: number; takeUsd: number; purges: number; expoUsd: number; expoPct: number;
+} {
+  const tail = listTrades(db, { limit: 5000 }).filter((t) => t.strategy === "maxscalp" && t.side === "sell");
+  const takes = tail.filter((t) => (t.reason ?? "").startsWith("take ladder"));
+  const purges = tail.filter((t) => {
+    const r = t.reason ?? "";
+    return r.endsWith("exit");
+  });
+  const sweptUsd = kvGetJson<number>(db, "maxscalpSweptUsd", 0);
+  const expoPct = navUsd + sweptUsd > 0 ? (positionsUsd / (navUsd + sweptUsd)) * 100 : 0;
+  return {
+    takes: takes.length,
+    takeUsd: takes.reduce((a, t) => a + t.spendUsd, 0),
+    purges: purges.length,
+    expoUsd: positionsUsd,
+    expoPct: Math.round(expoPct * 10) / 10,
+  };
 }
