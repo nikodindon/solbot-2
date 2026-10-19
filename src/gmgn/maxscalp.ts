@@ -30,13 +30,12 @@ import fs from "node:fs";
 
 export interface MaxScalpConfig {
   initialUsd: number;
-  tradeUsd: number;
   /** premier take: récupérer ce montant en $ (vs la position doublée) */
   firstTakeUsd: number;
   /** ensuite: % du sol prélevé à chaque nouveau ×2 */
   ladderTakePct: number;
   minLiquidityUsd: number;
-  /** v8: plancher de volume 5 min à l'entrée — l'analyse run 5 (380 syms) montre que vol5m < 20k$ = −0.08-0.11$/sym, ≥ 20k$ = seule bande positive */
+  /** v8: plancher de volume 5 min à l'entrée — l'analyse 380 syms run 6 montre ~ les bandes ≥ 50k sont les seules à espérance positive (20-30k = cratère) */
   minVol5mUsd: number;
   /** anti-trap: jamais d'entrée sur un listing coté au-dessus de ce prix (stables / mauvais cotations) */
   maxPriceUsd: number;
@@ -70,23 +69,28 @@ export interface MaxScalpConfig {
   feeBps: number;
   slippageBps: number;
   maxPositions: number;
+  /** lot de base pour la bande 50-100k$ de volume 5m */
+  tradeUsd: number;
+  /** v10 turbo: vol5m ≥ turboVol5mUsd → lot tradeUsdTurbo (la bande ≥100k$ est le seul signal fortement positif) */
+  tradeUsdTurbo: number;
+  turboVol5mUsd: number;
 }
 
 export function maxscalpDefaults(): MaxScalpConfig {
   return {
-    initialUsd: 100,
-    tradeUsd: 1,
+    initialUsd: 500,
+    tradeUsd: 3,
     firstTakeUsd: 1.2,
     ladderTakePct: 0.2,
     minLiquidityUsd: 5_000,
-    minVol5mUsd: 20_000,
+    minVol5mUsd: 50_000,
     maxPriceUsd: 0.05,
     rugExitPct: 0.6,
     moonStopDropPct: 0.6,
     maxLotsPerSymbol: 2,
     /** sécurisation: au-dessus de ce NAV, on met sweepUsd de côté (hors wallet du bot) */
-    sweepTriggerUsd: 102,
-    sweepUsd: 2,
+    sweepTriggerUsd: 505,
+    sweepUsd: 5,
     cooldownSec: 60,
     /** churn: lot ≥ 30 min, plat (±0.08$), token sans volume (vu en discovery il y a ≥ 30 min) → purge */
     idleExitMinAgeMin: 30,
@@ -107,7 +111,10 @@ export function maxscalpDefaults(): MaxScalpConfig {
     /** v9: fee = LP pool réel (Raydium/Meteora ~25-60 bps) — l'ancien 200 bps "platform fee Jupiter" n'existe pas par défaut sur le router retail et doublait le péage de churn en fiction */
     feeBps: 45,
     slippageBps: 250,
-    maxPositions: 90,
+    maxPositions: 40,
+    /** v10 turbo: la bande ≥ 100k$ de volume 5m porte le lot gros (avg +1.18$/sym à l'échantillon) */
+    tradeUsdTurbo: 5,
+    turboVol5mUsd: 100_000,
   };
 }
 
@@ -494,7 +501,7 @@ export class MaxScalper {
       step(`SECURISE ${this.cfg.sweepUsd}$ USDT (total secure ${swept.toFixed(2)}$)`);
     }
 
-    // === 3) entrées 1$ sur tout candidat (cap par nom de famille) ===
+    // === 3) entrées sur tout candidat — v10: lot calibré par bande de vol5m (50-100k$ → 3$, ≥100k$ → 5$) ===
     let buys = 0;
     const positionsAll = listPositions(this.db, true);
     const symbolCount = new Map<string, number>();
@@ -515,18 +522,22 @@ export class MaxScalper {
         continue;
       }
       if (positionsAll.length + buys >= this.cfg.maxPositions) {break;}
-      if (this.cash() < this.cfg.tradeUsd * 1.05) {break;}
+      const lotUsd = this.lotUsd(c);
+      if (this.cash() < lotUsd * 1.05) {
+        this.rec("reject", `${c.symbol}: cash ${this.cash().toFixed(2)}$ < lot ${lotUsd}$ — pas d'entrée`);
+        break;
+      }
       if ((symbolCount.get(c.symbol) ?? 0) >= this.cfg.maxLotsPerSymbol) {
         this.rec("reject", `${c.symbol}: cap familles — déjà ${(symbolCount.get(c.symbol) ?? 0)} lot(s) du même nom de la range, pas de lot supplémentaire`);
         continue;
       }
-      await this.buy(c);
+      await this.buy(c, lotUsd);
       symbolCount.set(c.symbol, (symbolCount.get(c.symbol) ?? 0) + 1);
       seen[c.mint] = now;
       buys += 1;
     }
     kvSetJson(this.db, "maxscalpSeenAt", seen);
-    if (buys > 0) {step(`entrées: ${buys} nouveau(x) lot(s) de 1$`);}
+    if (buys > 0) {step(`entrées: ${buys} nouveau(x) lot(s)`);}
 
     // === 4) equity ===
     const finalPos = listPositions(this.db, true);
@@ -545,9 +556,14 @@ export class MaxScalper {
     return lines;
   }
 
-  private buy(c: Candidate): void {
+  /** v10: lot par bande de vol5m — le turbo ≥ 100k$ (seule bande à +1.18$/sym sur 380 syms) porte le gros lot */
+  private lotUsd(c: Candidate): number {
+    return c.vol5mUsd >= this.cfg.turboVol5mUsd ? this.cfg.tradeUsdTurbo : this.cfg.tradeUsd;
+  }
+
+  private buy(c: Candidate, lotUsd: number): void {
     const ts = Date.now();
-    const f = simulateBuy(this.cfg.tradeUsd, c.priceUsd, {
+    const f = simulateBuy(lotUsd, c.priceUsd, {
       feeBps: this.cfg.feeBps,
       slippageBps: this.cfg.slippageBps,
       solPrice: 150,
@@ -555,7 +571,7 @@ export class MaxScalper {
       liquidityUsd: c.liquidityUsd,
     });
     addLot(this.db, c.mint, c.symbol, f.qty, f.priceEffective, ts);
-    paperCashSet(this.db, this.cash() - this.cfg.tradeUsd);
+    paperCashSet(this.db, this.cash() - lotUsd);
     const map = this.ladder();
     const st = map[c.mint];
     if (st) {st.entryCount += 1;}
@@ -567,7 +583,7 @@ export class MaxScalper {
       mint: c.mint,
       symbol: c.symbol,
       side: "buy",
-      spendUsd: this.cfg.tradeUsd,
+      spendUsd: lotUsd,
       qty: f.qty,
       priceUsd: f.priceEffective,
       expectedPriceUsd: c.priceUsd,

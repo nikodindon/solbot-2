@@ -213,6 +213,13 @@ Base vierge (100$, 0 position), deux garde-fous de vérité :
 - **v9.1 budget unique dans la feed** : portière `gateMs 4.6s` (12-13 req/min) partagée par discovery ET candles, discovery en **round-robin 1 path/refresh + cache persistant** (pages new_pools + h24 sort + `trending_pools` = la surface qui nourrissait les NTDA), cooldown 429 visible 60 s, 2 bougies/tick max. Le warmup boot passe à ~7 min (86 requêtes portières), les ticks ensuite flottent en 15 s.
 - **v9.1 live** : discovery 3 candidats / 1 entrable → buy. NAV 38.8$.
 
+### v10 — capital 500$, gate 50k$, lots par bande (en route)
+
+- **Découpage final des 380 syms** par vol5m à l'entrée : 20-30k −0.278$/sym (LE cratère — des "pumps" naissants purs), 30-50k −0.03 (neutre), **50-100k +0.381$/sym, ≥100k +1.183$/sym** (les NTDA +8.8, MUNK +3.9, DAC +2.8, MIRIAM +11.9 vivaient tous dans ces bandes).
+- **Config v10** : `minVol5mUsd 50_000`, `tradeUsd 3` (50-100k), `tradeUsdTurbo 5` + `turboVol5mUsd 100_000`, `maxPositions 40` (lots plus gros, plus de cash en munition), `initialUsd 500`, sweep 505$/5$.
+- **Fair-play noté** : la bande ≥50k n>17/9 uniquement — v10 est une mesure, pas une certitude. Critère d'arrêt : si en 2-3h la bande turbo fait la même casse que 20-30k, le signal vol n'était pas le bon discriminateur.
+- **DB neuve à 500$** (run 6 archivé `maxscalp-run6-churn.sqlite`, ~−51$ de churn/fees en 11h). Premier tick : FABLES/SO/ALLOX langé en turbo 5$ (vol5m 219k/209k/215k — exactement la bande visée).
+
 ---
 
 ## Leçons générales (running notes)

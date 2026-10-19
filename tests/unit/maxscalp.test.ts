@@ -39,7 +39,8 @@ const CAND: Candidate = {
 };
 
 function scalperFor(db: DB, feed: DiscoveryFeed, over: Partial<MaxScalpConfig> = {}): MaxScalper {
-  return new MaxScalper({ db, cfg: { ...maxscalpDefaults(), ...over }, feed });
+  // tests: lots de 1$ (les défauts v10 sont 3$/5$), capital 100$
+  return new MaxScalper({ db, cfg: { ...maxscalpDefaults(), tradeUsd: 1, tradeUsdTurbo: 1, initialUsd: 100, ...over }, feed });
 }
 
 function freshDb(): DB {
@@ -137,16 +138,43 @@ describe("MaxScalper garde-fous anti-rug", () => {
     expect(listTrades(db, {}).filter((t) => t.side === "buy")).toHaveLength(0);
   });
 
-  it("filtre entrée v8: vol5m < minVol5mUsd (20k$) refusé — la bande morte de l'analyse run 5", async () => {
-    const dead = { ...CAND, vol5mUsd: 5_000 };
+  it("filtre entrée v8→v10: vol5m < minVol5mUsd (50k$) refusé — le cratère 20-30k de l'analyse run 6", async () => {
+    const dead = { ...CAND, vol5mUsd: 10_000 };
     const s = scalperFor(db, new LadderFeed([dead]));
     await s.tick();
     expect(listTrades(db, {}).filter((t) => t.side === "buy")).toHaveLength(0);
     // exactement à la limite → accepté
-    const alive = { ...CAND, vol5mUsd: 20_000 };
+    const alive = { ...CAND, vol5mUsd: 50_000 };
     const s2 = scalperFor(db, new LadderFeed([alive]));
     await s2.tick();
     expect(listTrades(db, {}).filter((t) => t.side === "buy")).toHaveLength(1);
+  });
+
+  it("v10 sizing: lot 3$ band 50-100k, lot 5$ turbo ≥ 100k, cash insuffisant → rejet propre", async () => {
+    const mid = { ...CAND, vol5mUsd: 80_000, symbol: "MIDBAND" };
+    const s = scalperFor(db, new LadderFeed([mid]), { tradeUsd: 3 });
+    await s.tick();
+    const [midBuy] = listTrades(db, {}).filter((t) => t.side === "buy");
+    expect(midBuy!.spendUsd).toBe(3);
+
+    const db2 = freshDb();
+    try {
+      paperCashSet(db2, 6.2);
+      const turbo = { ...CAND, mint: "TURBO_mint", symbol: "TURBO", vol5mUsd: 200_000 };
+      const s2 = new MaxScalper({ db: db2, cfg: { ...maxscalpDefaults(), initialUsd: 5 }, feed: new LadderFeed([turbo]) });
+      await s2.tick();
+      const buys = listTrades(db2, {}).filter((t) => t.side === "buy");
+      expect(buys).toHaveLength(1);
+      expect(buys[0]!.spendUsd).toBe(5);
+      // si le cash ne couvre pas le lot → reject logué, zéro trade
+      const db3 = freshDb();
+      try {
+        paperCashSet(db3, 4.2);
+        const s3 = new MaxScalper({ db: db3, cfg: { ...maxscalpDefaults(), initialUsd: 5 }, feed: new LadderFeed([turbo]) });
+        await s3.tick();
+        expect(listTrades(db3, {}).filter((t) => t.side === "buy")).toHaveLength(0);
+      } finally {closeDb(db3);}
+    } finally {closeDb(db2);}
   });
 
   it("v9: purgeLegacy liquide les lots ouverts avant la coupe, pas les nouveaux", async () => {
@@ -238,11 +266,11 @@ describe("MaxScalper v3 — sweep USDT + recycle cash", () => {
   afterEach(() => {closeDb(db);});
 
   it("sweep: NAV > trigger → 2$ mis à l'abri, compteur kv, n'itère pas si NAV < trigger", async () => {
-    const s1 = scalperFor(db, new LadderFeed([CAND]), { sweepTriggerUsd: 101 });
+    const s1 = scalperFor(db, new LadderFeed([CAND]), { sweepTriggerUsd: 101, sweepUsd: 2 });
     await s1.tick();
     let sells = listTrades(db, {}).filter((t) => t.side === "sell");
     expect(sells).toHaveLength(0);       // NAV ~99.5 < 101 → pas de sweep
-    const nav2 = scalperFor(db, new LadderFeed([], 0.031), { sweepTriggerUsd: 101 }); // ×3.1 → NAV ~102
+    const nav2 = scalperFor(db, new LadderFeed([], 0.031), { sweepTriggerUsd: 101, sweepUsd: 2 }); // ×3.1 → NAV ~102
     await nav2.tick();
     sells = listTrades(db, {}).filter((t) => t.side === "sell");
     expect(sells.length).toBeGreaterThanOrEqual(1);   // le take n°1 est passé avant le sweep
@@ -252,7 +280,7 @@ describe("MaxScalper v3 — sweep USDT + recycle cash", () => {
     expect(kvGetJson<number>(db, "maxscalpSweptUsd", 0)).toBe(2);
     // NAV a retombé sous le trigger → pas de double sweep au tick suivant
     const before = paperCashGet(db, 100);
-    await scalperFor(db, new LadderFeed([], 0.031), { sweepTriggerUsd: 101 }).tick();
+    await scalperFor(db, new LadderFeed([], 0.031), { sweepTriggerUsd: 101, sweepUsd: 2 }).tick();
     expect(paperCashGet(db, 100)).toBeCloseTo(before, 6);
     expect(kvGetJson<number>(db, "maxscalpSweptUsd", 0)).toBe(2);
   });
@@ -287,21 +315,21 @@ describe("MaxScalper v4 — idle exit (churn)", () => {
   beforeEach(() => {db = freshDb();});
   afterEach(() => {closeDb(db);});
 
-  it("cap 90 → purge des 5 plus vieux lots plats sans volume, oldest-first, slot re-acheté au tick suivant", async () => {
+  it("v10 cap 40 → purge des 5 plus vieux lots plats sans volume, oldest-first, slot re-acheté au même tick", async () => {
     const now = Date.now();
-    // 90 lots: 10 vieux (2h), 80 récents
-    for (let i = 0; i < 90; i++) {
+    // 44 lots: 10 vieux (2h), 34 récents
+    for (let i = 0; i < 44; i++) {
       const age = i < 10 ? now - 2 * 3_600_000 : now - 60_000;
       addLot(db, `m${i}_mint`, `SYM${i}`, 96, 0.01, age);
     }
-    expect(listPositions(db, true)).toHaveLength(90);
+    expect(listPositions(db, true)).toHaveLength(44);
     const newly = { ...CAND, mint: "NEW_mint", symbol: "NEW" };
     const s = scalperFor(db, new LadderFeed([{ ...newly }], 0.01));
     await s.tick();
     const idleSells = listTrades(db, {}).filter((t) => t.side === "sell" && t.reason === "idle exit");
     expect(idleSells).toHaveLength(5);
     expect(idleSells.every((t) => /^m[0-9]_/.test(t.mint))).toBe(true); // vieux d'abord
-    expect(listPositions(db, true)).toHaveLength(86); // 90 − 5 purges + 1 nouvelle entrée
+    expect(listPositions(db, true)).toHaveLength(40); // 44 − 5 purges + 1 nouvelle entrée (cap 40)
     expect(listTrades(db, {}).some((t) => t.side === "buy" && t.symbol === "NEW")).toBe(true);
   });
 
