@@ -137,6 +137,18 @@ describe("MaxScalper garde-fous anti-rug", () => {
     expect(listTrades(db, {}).filter((t) => t.side === "buy")).toHaveLength(0);
   });
 
+  it("filtre entrée v8: vol5m < minVol5mUsd (20k$) refusé — la bande morte de l'analyse run 5", async () => {
+    const dead = { ...CAND, vol5mUsd: 5_000 };
+    const s = scalperFor(db, new LadderFeed([dead]));
+    await s.tick();
+    expect(listTrades(db, {}).filter((t) => t.side === "buy")).toHaveLength(0);
+    // exactement à la limite → accepté
+    const alive = { ...CAND, vol5mUsd: 20_000 };
+    const s2 = scalperFor(db, new LadderFeed([alive]));
+    await s2.tick();
+    expect(listTrades(db, {}).filter((t) => t.side === "buy")).toHaveLength(1);
+  });
+
   it("rug exit: lot jamais profitable qui tombe à ≤60% du coût → purge complète", async () => {
     await scalperFor(db, new LadderFeed([CAND])).tick();
     // crash −50% (limite de purge 60%)

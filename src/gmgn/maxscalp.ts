@@ -36,6 +36,8 @@ export interface MaxScalpConfig {
   /** ensuite: % du sol prélevé à chaque nouveau ×2 */
   ladderTakePct: number;
   minLiquidityUsd: number;
+  /** v8: plancher de volume 5 min à l'entrée — l'analyse run 5 (380 syms) montre que vol5m < 20k$ = −0.08-0.11$/sym, ≥ 20k$ = seule bande positive */
+  minVol5mUsd: number;
   /** anti-trap: jamais d'entrée sur un listing coté au-dessus de ce prix (stables / mauvais cotations) */
   maxPriceUsd: number;
   /** si (takés nuls et mark ≤ rugExitPct × entry) → dump complet du lot */
@@ -77,6 +79,7 @@ export function maxscalpDefaults(): MaxScalpConfig {
     firstTakeUsd: 1.2,
     ladderTakePct: 0.2,
     minLiquidityUsd: 5_000,
+    minVol5mUsd: 20_000,
     maxPriceUsd: 0.05,
     rugExitPct: 0.6,
     moonStopDropPct: 0.6,
@@ -373,6 +376,7 @@ export class MaxScalper {
     }
     const candsOk = cands.filter(
       (c) => c.liquidityUsd >= this.cfg.minLiquidityUsd
+        && c.vol5mUsd >= this.cfg.minVol5mUsd
         && c.priceUsd > 0
         && c.priceUsd <= this.cfg.maxPriceUsd,
     );

@@ -196,6 +196,14 @@ Base vierge (100$, 0 position), deux garde-fous de vérité :
 - **Inset incident attribuable** : la clé démo CG a raté son quota mensuel (10k calls) → endpoint `/onchain` + error 10006 avec data vide en 200 → "0 candidats" muet. Trait-maintenant : maxscalp sur l'API publique + page 2 de `new_pools` + détection d'erreur visible (commit `3295f82`).
 - swept 0 (jamais >102$ NAV), 1 ticker blacklisté.
 
+### Post-mortem run 6 (analyse à NAV 49$) → v8
+
+- **L'anatomie du −51$ n'est PAS un pick raté** : le pire symbole du run perd −1.21$ (PIERRE). Le vrai découpage : churn `idle exit` 511 lots → **−39.74$** (−0.078$/lot), fees jup sur 1 264 trades → **−21.66$**, moteurs positifs (recycle +7.12$, moon stop +4.75$, 4 takes +3.45$) → +15.3$. Les pertes sont une **taxe de rotation** (12% de roundtrip sur chaque lot de 1$), pas la sélection.
+- **Révélation par bande de vol5m à l'entrée** (380 syms) : vol5m < 8k −19.9$, 8-20k −10.2$, **≥ 20k = seule bande positive** (+0.35$ sur 31 syms). Contrefactuel : filtrer ≥ 20k ≈ tout acheter = +30$ de delta.
+- **Fausse piste écartée** : le `impactBps` de sell (≈4.8 bps sur 1.2$) est négligeable — pas de patch paper-broker. Les micro-frais fixes (jup 2% + $0.015 SOL/side) structurés en % du lot de 1$ font ~12% de roundtrip.
+- **v8** : `minVol5mUsd: 20_000` à l'entrée. 127/127.question test ajouté (vol < 20k refusé, = limite accepté).
+- **Leçon** : sur la loterie à micro-lots, la question "quoi acheter" compte moins que "combien de fois on paie le péage" — quand les moteurs prennent (0.7% de take rate ce run vs 4.4% run 4) le churn devient fonds de roulement de Jupiter.
+
 ---
 
 ## Leçons générales (running notes)
