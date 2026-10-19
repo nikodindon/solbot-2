@@ -189,6 +189,13 @@ Base vierge (100$, 0 position), deux garde-fous de vérité :
 
 **Tests (25 maxscalp, 126 total)** : NIVRA ×5225 → vente au prix discovery, pas de cash fiction ; bougie légitime ×2.1 → honorée ; candle ×10 000 sans discovery → clamp entry×20 ; chain x2 inchangée (les doubles légitimes passent à travers le guard).
 
+### Run 5 — 18 h : NAV 72.06$ ; le churn est le métronome, mais la loterie s'est endormie
+
+- **Churn** : 211 `idle exit` façon (re-financent 178.8$), 9 `dead exit` (7.3$), 4 rug exit, 2 moon stop (1.3$).
+- **Ladder à plat** : seulement 2 `take ladder` (2.26$) — la nuit sans entrées (0:11→15:00, discovery muet) a déshydraté le pipeline : churnait sans re-semer.
+- **Inset incident attribuable** : la clé démo CG a raté son quota mensuel (10k calls) → endpoint `/onchain` + error 10006 avec data vide en 200 → "0 candidats" muet. Trait-maintenant : maxscalp sur l'API publique + page 2 de `new_pools` + détection d'erreur visible (commit `3295f82`).
+- swept 0 (jamais >102$ NAV), 1 ticker blacklisté.
+
 ---
 
 ## Leçons générales (running notes)
