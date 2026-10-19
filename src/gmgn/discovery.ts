@@ -157,10 +157,19 @@ export class GeckoFeed implements DiscoveryFeed {
     this.lastRefresh = now;
     this.cachedList = [];
     for (const path of [
+      // page 1 = pools <2 min (l'anti-snipe minAgeMin les écarte) ; page 2 = la tranche
+      // 2..20 min qui atterrit dans la fenêtre d'âge exploitable à mesure que le temps passe
       "networks/solana/new_pools?page=1&include=base_token,dex",
+      "networks/solana/new_pools?page=2&include=base_token,dex",
       "networks/solana/pools?page=1&sort=h24_volume_usd_desc&include=base_token,dex",
     ]) {
       const j = await this.getJson<PoolResp>(`${this.cfg.baseUrl}/${path}`);
+      // quota CG reelpli (error_code 10006) → data vide en 200 : on crie au lieu d'un "0 candidats" muet
+      if (j && !Array.isArray(j.data)) {
+        const err = j as { error?: { error_message?: string }; status?: { error_message?: string } };
+        const msg = err.error?.error_message ?? err.status?.error_message ?? "réponse illisible";
+        throw new Error(`gecko discovery vide: ${msg}`);
+      }
       // map id token gecko → {address, symbol} depuis `included`
       const baseInfo = new Map<string, { address: string; symbol?: string }>();
       for (const inc of j?.included ?? []) {

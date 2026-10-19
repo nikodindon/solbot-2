@@ -10,9 +10,9 @@ import { migrate } from "../state/migrations.js";
 import { tradeCount } from "../state/trades.js";
 import { paperCashSet } from "../portfolio/portfolio.js";
 import { MaxScalper, maxscalpDefaults } from "../gmgn/maxscalp.js";
-import { makeFeed } from "../gmgn/discovery.js";
 import { DashboardServer } from "../dashboard/server.js";
 import { buildState } from "../dashboard/state.js";
+import { makeFeed } from "../gmgn/discovery.js";
 
 export async function runMaxscalp(opts: { once?: boolean } = {}): Promise<void> {
   const root = projectRoot();
@@ -30,8 +30,9 @@ export async function runMaxscalp(opts: { once?: boolean } = {}): Promise<void> 
   }
 
   const envGmgn = process.env["GMGN_API_KEY"] ?? null;
-  const envGecko = process.env["GECKO_API_KEY"] ?? process.env["COINGECKO_API_KEY"] ?? null;
-  const feed = makeFeed(envGmgn, envGecko);
+  // scalpeur sur l'API publique GeckoTerminal : le quota démo CG (10k appels/mois) bascule
+  // sur api.coingecko.com qui finit par renvoyer error_code 10006 + data vide silencieusement.
+  const feed = makeFeed(envGmgn, null);
 
   let dynUniverse: { mint: string; symbol: string }[] = [];
   const scalper = new MaxScalper({ db, cfg: maxscalpDefaults(), feed, universeMutator: (tokens) => { dynUniverse = tokens; } });

@@ -4,6 +4,7 @@
 const $ = (id) => document.getElementById(id);
 const fmtUsd = (v, d = 3) => (v === null || v === undefined || (typeof v === "number" && !isFinite(v))) ? "—" : `${v >= 0 ? "" : "−"}$${Math.abs(v).toFixed(d)}`;
 const fmtPct = (v, d = 1) => (v === null || v === undefined || !isFinite(v)) ? "—" : `${v.toFixed(d)}%`;
+const hhmmss = (ts) => new Date(ts).toLocaleTimeString([], { hour12: false });
 const agoOf = (ts) => !ts ? "—" : Math.round((Date.now() - ts) / 1000) < 60 ? `${Math.round((Date.now() - ts) / 1000)}s` : `${Math.round((Date.now() - ts) / 60000)}min`;
 const symFix = (s) => s === "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v" ? "USDC" : s;
 
@@ -64,7 +65,7 @@ function renderGuards(g) {
   const rows = [
     ["kill-switch", g.killSwitchAtMs ? `ACTIF depuis ${agoOf(g.killSwitchAtMs)}` : "armé"],
     ["fichier STOP", g.stopFile ? "PRÉSENT (entrées bloquées)" : "absent"],
-    ["pause journalière", g.pausedUntilMs && Date.now() < g.pausedUntilMs ? `jusqu'à ${new Date(g.pausedUntilMs).toISOString().slice(11, 16)}Z` : "inactive"],
+    ["pause journalière", g.pausedUntilMs && Date.now() < g.pausedUntilMs ? `jusqu'à ${new Date(g.pausedUntilMs).toLocaleTimeString([], { hour12: false, hour: "2-digit", minute: "2-digit" })} (heure locale)` : "inactive"],
     ["limite journalière", `${g.dailyLossLimitPct}% (ancre NAV ${fmtUsd(g.daily.anchorNavUsd, 2)})`],
   ];
   $("guards").querySelector("tbody").innerHTML = rows.map((r) => `<tr><td>${r[0]}</td><td>${r[1]}</td></tr>`).join("");
@@ -127,7 +128,7 @@ async function refreshTrades() {
     cachedTrades = r.trades || [];
     const tb = $("trades").querySelector("tbody");
     tb.innerHTML = cachedTrades.map((t) => `<tr>
-      <td>${new Date(t.tsMs).toISOString().slice(11, 19)}</td>
+      <td>${hhmmss(t.tsMs)}</td>
       <td>${symFix(t.symbol)}</td>
       <td>${t.side === "buy" ? "achat" : "vente"}</td>
       <td>${t.qty.toPrecision(6)}</td>
@@ -184,7 +185,7 @@ async function refreshDecisions() {
   try {
     const r = await (await fetch("/api/decisions?limit=60")).json();
     $("log").innerHTML = (r.decisions || []).map(d => {
-      const time = new Date(d.tsMs).toISOString().slice(11, 19);
+      const time = hhmmss(d.tsMs);
       return `<li class="k-${d.kind}"><span class="meta">${time} · ${d.tickId}${d.strategy ? " · " + d.strategy : ""}</span>${escapeHtml(d.line)}</li>`;
     }).join("");
   } catch { /* silent */ }
@@ -195,7 +196,7 @@ function escapeHtml(s) {
 }
 
 function liveLog(d) {
-  const time = new Date(d.tsMs).toISOString().slice(11, 19);
+  const time = hhmmss(d.tsMs);
   const li = document.createElement("li");
   li.className = `k-${d.kind}`;
   li.innerHTML = `<span class="meta">${time} · ${d.tickId}${d.strategy ? " · " + d.strategy : ""}</span>${escapeHtml(d.line)}`;
