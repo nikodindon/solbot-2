@@ -28,7 +28,7 @@ function mockedFeed(steps: Step[]): GeckoFeed {
       headers: { get: () => null },
     };
   };
-  const cfg = { ...geckoFeedDefaults("demo"), requestPauseMs: 1 };
+  const cfg = { ...geckoFeedDefaults("demo"), requestPauseMs: 0, gateMs: 0 };
   return new GeckoFeed(cfg, fetchImpl);
 }
 
@@ -96,6 +96,21 @@ describe("GeckoFeed (discovery)", () => {
     // 2e appel: pool en cache → 1 seule requête OHLCV
     const bar2 = await feed.latestCandle("ABC_mint");
     expect(bar2?.ts).toBe(7000);
+  });
+
+  it("429 épuisé → erreur visée + cooldown: refresh() ressert le cache au lieu de silencieux", async () => {
+    const feed = mockedFeed([
+      { status: 200, body: POOL_BODY },
+      { status: 429, body: {} },
+      { status: 429, body: {} },
+    ]);
+    // 1 path per refresh (budget IP) : refresh#1 parse 1 candidat
+    expect(await feed.refresh()).toHaveLength(1);
+    // refresh#2 → 429 ×2 → throw visible (avant: "0 candidats" muet)
+    await expect(feed.refresh()).rejects.toThrow("gecko 429");
+    // cooldown: pas de re-fetch (steps épuisés) → cache non vide
+    const again = await feed.refresh();
+    expect(again).toHaveLength(1);
   });
 });
 

@@ -149,6 +149,31 @@ describe("MaxScalper garde-fous anti-rug", () => {
     expect(listTrades(db, {}).filter((t) => t.side === "buy")).toHaveLength(1);
   });
 
+  it("v9: purgeLegacy liquide les lots ouverts avant la coupe, pas les nouveaux", async () => {
+    // un lot "ancien" (simulé via openedMs réécrit) + un lot frais
+    await scalperFor(db, new LadderFeed([CAND])).tick();
+    const dbRows = db.prepare("SELECT ts_ms FROM trades WHERE side=? ORDER BY ts_ms").all("buy");
+    const first = Number(dbRows[0]!.ts_ms);
+    const s2 = scalperFor(db, new LadderFeed([{ ...CAND, mint: "LEG_mint2", symbol: "FRESH" }]));
+    await s2.tick();
+    const before = listPositions(db, true);
+    expect(before.length).toBeGreaterThanOrEqual(2);
+    db.prepare("UPDATE positions SET opened_ms=? WHERE mint=?").run(first - 10_000, before[0]!.mint);
+    expect(listPositions(db, true).filter((p) => p.openedMs < first)).toHaveLength(1);
+    const sold = await s2.purgeLegacy(first);
+    expect(sold).toBe(1);
+    const sells = listTrades(db, {}).filter((t) => t.side === "sell");
+    expect(sells.some((t) => (t.reason ?? "").startsWith("purge legacy v9"))).toBe(true);
+    expect(listPositions(db, true).map((p) => p.mint)).not.toContain(before[0]!.mint);
+  });
+
+  it("v9: feeBps LP réel (45) — jup fee d'un lot de 1$ < 0.02$", async () => {
+    const s = scalperFor(db, new LadderFeed([CAND]));
+    await s.tick();
+    const [buy] = listTrades(db, {}).filter((t) => t.side === "buy");
+    expect(buy!.jupFeeUsd).toBeLessThan(0.02);
+  });
+
   it("rug exit: lot jamais profitable qui tombe à ≤60% du coût → purge complète", async () => {
     await scalperFor(db, new LadderFeed([CAND])).tick();
     // crash −50% (limite de purge 60%)

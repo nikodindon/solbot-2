@@ -104,7 +104,8 @@ export function maxscalpDefaults(): MaxScalpConfig {
     /** v7: price > 4× dernier prix discovery (liquide) = pool relancé / cote mule → la vente se fait au prix discovery */
     maxCandleJump: 4,
     loopSec: 15,
-    feeBps: 200,
+    /** v9: fee = LP pool réel (Raydium/Meteora ~25-60 bps) — l'ancien 200 bps "platform fee Jupiter" n'existe pas par défaut sur le router retail et doublait le péage de churn en fiction */
+    feeBps: 45,
     slippageBps: 250,
     maxPositions: 90,
   };
@@ -222,6 +223,34 @@ export class MaxScalper {
     if (purged > 0) {step(`churn: ${purged} lot(s) purgé(s) (idle/dead), slots libérés`);}
   }
 
+  /**
+   * v9: grand nettoyage one-shot — liquide tous les lots ouverts avant `beforeMs` (marés
+   * hérités d'une config antérieure), au mark frais si le marché permet la vente, sinon au
+   * dernier prix connu / haircut (même discipline que dead exit). Retourne le nb de lots vendus.
+   */
+  async purgeLegacy(beforeMs: number): Promise<number> {
+    const map = this.ladder();
+    const freshLimitMs = this.cfg.sellMarkFreshS * 1_000;
+    const positions = listPositions(this.db, true).filter((p) => p.openedMs < beforeMs).sort((a, b) => a.openedMs - b.openedMs);
+    let sold = 0;
+    for (const pos of positions) {
+      const st: LadderState = map[pos.mint] ?? { refUsd: pos.qty * pos.avgEntryUsd * 2, takes: 0, entryCount: 1 };
+      const { price, ageMs: markAgeMs, src: markSrc } = this.priceWithAge(pos.mint, pos.avgEntryUsd);
+      if (markAgeMs <= freshLimitMs) {
+        await this.partialSell(pos, price, 1, st, "purge legacy v9", { ageMs: markAgeMs, src: markSrc });
+      } else if (markAgeMs !== Number.POSITIVE_INFINITY) {
+        await this.partialSell(pos, price, 1, st, "purge legacy v9 (dead)", { allowStale: true, src: markSrc });
+      } else {
+        const dead = pos.avgEntryUsd * this.cfg.deadHaircutPct;
+        await this.partialSell(pos, dead, 1, st, "purge legacy v9 (haircut)", { allowStale: true, src: markSrc });
+      }
+      delete map[pos.mint];
+      kvSetJson(this.db, "maxscalpLadder", map);
+      sold += 1;
+    }
+    return sold;
+  }
+
   private rec(kind: "info" | "signal" | "reject" | "trade" | "kill" | "error", line: string, data?: Record<string, unknown>): void {
     insertDecision(this.db, { tsMs: Date.now(), tickId: 0, kind, strategy: "maxscalp", line: `${kind}: ${line}`, data });
   }
@@ -236,7 +265,8 @@ export class MaxScalper {
         return !row || now - row.ts > 120_000;
       })
       .sort((a, b) => (this.markCursor.get(a.mint) ?? 0) - (this.markCursor.get(b.mint) ?? 0))
-      .slice(0, 5);
+      // budget: le feed gecko public ne laisse passer qu'une requête par fenêtre — 2 bougies/tick, pas plus
+      .slice(0, 2);
     for (const p of oldestNow) {
       try {
         const bar = await this.feed.latestCandle(p.mint);

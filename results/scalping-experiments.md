@@ -204,6 +204,15 @@ Base vierge (100$, 0 position), deux garde-fous de vérité :
 - **v8** : `minVol5mUsd: 20_000` à l'entrée. 127/127.question test ajouté (vol < 20k refusé, = limite accepté).
 - **Leçon** : sur la loterie à micro-lots, la question "quoi acheter" compte moins que "combien de fois on paie le péage" — quand les moteurs prennent (0.7% de take rate ce run vs 4.4% run 4) le churn devient fonds de roulement de Jupiter.
 
+### v9 / v9.1 — réarmer : frais réels, purge legacy, budget gecko (perdant 40-46$)
+
+- **feeBps 200 → 45** : la "platform fee Jupiter" 2% n'existe pas par défaut pour le router retail ; l'alternative honnête est la LP fee pool (Raydium/Meteora 25-60 bps). Le roundtrip passe de ~12% → ~7% — LE principal gisement du fusible d'ancienneté churn paper.
+- **Purge legacy one-shot** (`scripts/maxscalp-purge-legacy.ts` + `MaxScalper.purgeLegacy`): liquide tout lot antérieur à la coupe, mark frais → sinon dernier prix connu → sinon haircut 50%. Résultat run réel : seulement 4 lots (coût 1.01$) — l'idle exit avait déjà mangé l'essentiel; le reste est réparti dans les 43 pos qui décutent.
+- **Constato findamental** : le NAS 6 retient ~40$ cassé (à 9-10 h) non pas par la vue du pick mais car 97% du capital était confiné dans des lots hérités à −7%/tour. Équation fix : en jeu 97%, cash 2%. Prévention future: sweep thruster octroi + purge.
+- **Étincelle découverte : la double-throttle gecko public** — l'IP se take ~1 requête toutes les ~5-15 s, et toute rafale (3 paths discovery + 4-6 fetch bougies/tick) déclenche une cascade 429 ratée: le cooldown généra **"0 candidats" muet** pendant des heures sans jamais écrire "discovery KO" (les bougies mangent le throw). Vérité instrumentée par probe direct : req 1 ok → req 2 429.
+- **v9.1 budget unique dans la feed** : portière `gateMs 4.6s` (12-13 req/min) partagée par discovery ET candles, discovery en **round-robin 1 path/refresh + cache persistant** (pages new_pools + h24 sort + `trending_pools` = la surface qui nourrissait les NTDA), cooldown 429 visible 60 s, 2 bougies/tick max. Le warmup boot passe à ~7 min (86 requêtes portières), les ticks ensuite flottent en 15 s.
+- **v9.1 live** : discovery 3 candidats / 1 entrable → buy. NAV 38.8$.
+
 ---
 
 ## Leçons générales (running notes)

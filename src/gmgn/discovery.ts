@@ -77,17 +77,23 @@ export interface GeckoFeedCfg {
   minAgeMin: number;
   maxAgeMin: number;
   maxRetries: number;
+  /** v9.1: portière unique — intervalle min entre DEUX getJson (discovery ET candles partagent le budget IP public) */
+  gateMs: number;
 }
 
 export function geckoFeedDefaults(apiKey: string | null): GeckoFeedCfg {
   return {
     baseUrl: apiKey ? "https://api.coingecko.com/api/v3/onchain" : "https://api.geckoterminal.com/api/v2",
     apiKey,
-    requestPauseMs: 1_200,
-    maxCandidates: 10,
+    /** throttle discovery: 1 path/refresh — le budget IP public gecko est ~1 requête/quinzaine secs, le reste est 429 */
+    requestPauseMs: 15_000,
+    maxCandidates: 30,
     minAgeMin: 2,
-    maxAgeMin: 24 * 60,
+    /** v9.1: fenêtre roulement données disponibles */
+    maxAgeMin: 26 * 60,
     maxRetries: 2,
+    /** ~13 req/min: l'équivalent de la fenêtre où le public gecko laisse passer (sinon 429/2) */
+    gateMs: 4_600,
   };
 }
 
@@ -96,6 +102,9 @@ export class GeckoFeed implements DiscoveryFeed {
   private prices = new Map<string, number>();
   private poolCache = new Map<string, string | null>();
   private lastRefresh = 0;
+  /** 429 en rafale → fenêtre de cooldown: refresh() ressert le cache sans re-marteler l'endpoint public */
+  private cooldownUntil = 0;
+  private lastReqAt = 0;
 
   constructor(
     private cfg: GeckoFeedCfg,
@@ -109,8 +118,16 @@ export class GeckoFeed implements DiscoveryFeed {
   private async getJson<T>(url: string): Promise<T | null> {
     for (let a = 1; a <= this.cfg.maxRetries; a++) {
       try {
+        // portière: séparer les requêtes (les rafales sont le déclencheur des 429 en série du public gecko)
+        const wait = this.cfg.gateMs - (Date.now() - this.lastReqAt);
+        if (wait > 0) {await sleep(wait);}
+        this.lastReqAt = Date.now();
         const res = await this.fetchImpl(url, { headers: this.headers() });
         if (res.status === 429 || res.status >= 500) {
+          if (res.status === 429 && a >= this.cfg.maxRetries) {
+            this.cooldownUntil = Date.now() + 60_000;
+            throw new Error(`gecko 429 rate limit — cooldown 60s (endpoint public IP-limité)`);
+          }
           const ra = res.headers.get("retry-after");
           await sleep(ra ? Number(ra) * 1_000 : this.cfg.requestPauseMs * a);
           continue;
@@ -154,47 +171,58 @@ export class GeckoFeed implements DiscoveryFeed {
   async refresh(): Promise<Candidate[]> {
     const now = Date.now();
     if (now - this.lastRefresh < this.cfg.requestPauseMs) {return this.cached();}
+    if (now < this.cooldownUntil) {return this.cached();}
     this.lastRefresh = now;
-    this.cachedList = [];
-    for (const path of [
-      // page 1 = pools <2 min (l'anti-snipe minAgeMin les écarte) ; page 2 = la tranche
-      // 2..20 min qui atterrit dans la fenêtre d'âge exploitable à mesure que le temps passe
-      "networks/solana/new_pools?page=1&include=base_token,dex",
-      "networks/solana/new_pools?page=2&include=base_token,dex",
-      "networks/solana/pools?page=1&sort=h24_volume_usd_desc&include=base_token,dex",
-    ]) {
-      const j = await this.getJson<PoolResp>(`${this.cfg.baseUrl}/${path}`);
-      // quota CG reelpli (error_code 10006) → data vide en 200 : on crie au lieu d'un "0 candidats" muet
-      if (j && !Array.isArray(j.data)) {
-        const err = j as { error?: { error_message?: string }; status?: { error_message?: string } };
-        const msg = err.error?.error_message ?? err.status?.error_message ?? "réponse illisible";
-        throw new Error(`gecko discovery vide: ${msg}`);
-      }
-      // map id token gecko → {address, symbol} depuis `included`
-      const baseInfo = new Map<string, { address: string; symbol?: string }>();
-      for (const inc of j?.included ?? []) {
-        const addr = inc.attributes?.address;
-        if (inc.type === "token" && inc.id && addr) {
-          baseInfo.set(inc.id, { address: addr, symbol: inc.attributes?.symbol });
-        }
-      }
-      for (const item of j?.data ?? []) {
-        const relId = item.relationships?.base_token?.data?.id;
-        const base = relId ? baseInfo.get(relId) ?? null : null;
-        const c = this.parsePool(item.attributes, base);
-        if (c) {this.cachedList.push(c);}
-        if (this.cachedList.length >= this.cfg.maxCandidates) {break;}
-      }
-      await sleep(this.cfg.requestPauseMs);
+    // budget IP public gecko = ~1 requête ok puis 429 en rafale (constaté 2026-10):
+    // UNE seule path par refresh, round-robin; le cache des candidats se comble au fil des ticks.
+    const path = this.paths[this.pathCursor % this.paths.length]!;
+    this.pathCursor += 1;
+    const j = await this.getJson<PoolResp>(`${this.cfg.baseUrl}/${path}`);
+    // quota CG reelpli (error_code 10006) → data vide en 200 : on crie au lieu d'un "0 candidats" muet
+    if (j && !Array.isArray(j.data)) {
+      const err = j as { error?: { error_message?: string }; status?: { error_message?: string } };
+      const msg = err.error?.error_message ?? err.status?.error_message ?? "réponse illisible";
+      throw new Error(`gecko discovery vide: ${msg}`);
     }
-    const seen = new Set<string>();
-    this.cachedList = this.cachedList.filter((c) => (seen.has(c.mint) ? false : (seen.add(c.mint), true)));
-    for (const c of this.cachedList) {this.prices.set(c.mint, c.priceUsd);}
-    return this.cachedList;
+    // map id token gecko → {address, symbol} depuis `included`
+    const baseInfo = new Map<string, { address: string; symbol?: string }>();
+    for (const inc of j?.included ?? []) {
+      const addr = inc.attributes?.address;
+      if (inc.type === "token" && inc.id && addr) {
+        baseInfo.set(inc.id, { address: addr, symbol: inc.attributes?.symbol });
+      }
+    }
+    for (const item of j?.data ?? []) {
+      const relId = item.relationships?.base_token?.data?.id;
+      const base = relId ? baseInfo.get(relId) ?? null : null;
+      const c = this.parsePool(item.attributes, base);
+      if (c) {this.cacheRows.set(c.mint, c);}
+    }
+    while (this.cacheRows.size > this.cfg.maxCandidates * 3) {
+      const firstKey = this.cacheRows.keys().next().value ?? "";
+      this.cacheRows.delete(firstKey);
+    }
+    for (const c of this.cacheRows.values()) {this.prices.set(c.mint, c.priceUsd);}
+    return this.cached();
   }
 
   private cachedList: Candidate[] = [];
-  private cached(): Candidate[] {return this.cachedList;}
+  private cacheRows = new Map<string, Candidate>();
+  private pathCursor = 0;
+  private readonly paths = [
+    // page 1 = pools <2 min (l'anti-snipe minAgeMin les écarte) ; page 2 = la tranche
+    // 2..20 min qui atterrit dans la fenêtre d'âge exploitable à mesure que le temps passe
+    "networks/solana/new_pools?page=1&include=base_token,dex",
+    "networks/solana/new_pools?page=2&include=base_token,dex",
+    // sort h24 volume: le top 20 global contient parfois des pools < 24h déjà traversées par la foule (la vague NTDA)
+    "networks/solana/pools?page=1&sort=h24_volume_usd_desc&include=base_token,dex",
+    // trending: momentum live — le contrefactuel "seule bande positive" du run 6 (les moteurs prennent quand le volume est là)
+    "networks/solana/trending_pools?include=base_token,dex",
+  ];
+  private cached(): Candidate[] {
+    this.cachedList = [...this.cacheRows.values()].slice(0, this.cfg.maxCandidates);
+    return this.cachedList;
+  }
 
   snapshotPrice(mint: string): number | null {
     return this.prices.get(mint) ?? null;
