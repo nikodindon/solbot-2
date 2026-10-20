@@ -241,8 +241,11 @@ Base vierge (100$, 0 position), deux garde-fous de vérité :
 - **v10.2 : garde-fou fake-pump** (trois paramètres: `fakePumpJump 4` ×, `fakePumpStallMs 15 min`, `fakePumpHaircut 0.5`) :
   - détection par position : mark courant ≥ 4× le dernier niveau différent, **aucune bougie OHLCV** après le début du plateau, plateau gelé ≥ 15 min → **FAKE PUMP PURGE** : vente complète au dernier niveau légitime ×0.5, blacklist du ticker ;
   - la bougie qui confirme le nouveau niveau = pump légitime → pas de purge (les vrais moons restent valables, les prix > entry×20 restent clampés à la vente comme avant) ;
-  - purge en priorité absolue dans la boucle ladder avant moon/rug/takes.
+  - purge en priorité absolue dans la boucle ladder avant moon/rug/takes;
   - pièges du chantier : `.all()` sans bind → mint = NULL → 0 rows silencieux, et le binding `undefined` de src fait ROLLBACK la transaction sans trace (les tests le font vieillir avec ticks datés pour le burst age de 18 min).
+- **v10.2 au boot: la fiction contre-attaque** — `repriceAll` a écrit la bougie OHLCV **du nouveau pool relancé** (réelle !) à 7.35e-3 → le moon-stop a liquidé le lot STREAM au clamp entry×20 = **+90.78$ de cash fiction** (trade id 82, px 2.64e-3), et l'exposition du book 310 → 40$ révélait qu'une partie des marks de l'après-midi était gelée-faux (le NAV 501 était aussi plâtre). La bougie "qui confirme" est celle du faux marché: elle ne prouve rien si la pool a été créée après l'ouverture des lots.
+- **v10.2-bis (les vrais fixes)**: (1) détection structurée: régime légitime = ligne la plus récente sous top/4 (les bougies intermédiaires de la pool relancée ne cassent plus le gel); (2) `getTokenMeta.poolCreatedMs > openedMs + 5min` → relaunch confirmé → purge même avec bougie; méta inconnue → bougie reste probante; (3) **restauration chirurgicale du ledger**: trade id 82 supprimé, lot STREAM ré-inséré (36 395 u @ 1.357e-4), `paperCashUsdc −95.72`, cache NAV re-réel: **cash 193.08 + expo ~31 + swept 160 ≈ 384$** contre le plâtre 501; réalisé honnête **−94.85$**.
+- **v10.1 (30k) autopsie et RVF**: l'après-midi 30-50k live = 27 `rug exit (rotate)` pour −86.74$, ~−3.2$/lot (bands run-6: neutre −0.03$/sym à l'échantillon → la mémoire d'échantillon ne survit pas au marché live). **Retour 50k** et leçon générale: la bande 30-50k ne se retouche qu'avec un échantillon live ≥ ~2 d de preuve contraire, pas avec l'archive.
 
 ---
 

@@ -22,7 +22,7 @@ import { insertEquity } from "../state/equity.js";
 import { kvGetJson, kvSetJson } from "../state/kv.js";
 import { paperCashGet, paperCashSet } from "../portfolio/portfolio.js";
 import { simulateBuy, simulateSell } from "../execution/paper-broker.js";
-import { insertTicks, upsertTokenMeta, latestTickAnyAge, latestDiscoveryTick, type Tick } from "../state/market.js";
+import { insertTicks, upsertTokenMeta, latestTickAnyAge, latestDiscoveryTick, getTokenMeta, type Tick } from "../state/market.js";
 
 type TickRowMap = Map<string, Tick>;
 import type { DiscoveryFeed, Candidate } from "./discovery.js";
@@ -35,7 +35,7 @@ export interface MaxScalpConfig {
   /** ensuite: % du sol prélevé à chaque nouveau ×2 */
   ladderTakePct: number;
   minLiquidityUsd: number;
-  /** v8→v10.1: plancher de volume 5 min à l'entrée. Bandes de l'analyse 380 syms: 20-30k = cratère (JAMAIS sous 30k), 30-50k neutre, ≥50k seules positives possible */
+  /** v8→v10.2: plancher de volume 5 min à l'entrée. 30-50k "neutre" sur l'échantillon run 6 mais v10.1 live: 27 rug à −3.2$/lot → retour 50k (revisiter avec un échantillon live ≥ 2 d) */
   minVol5mUsd: number;
   /** anti-trap: jamais d'entrée sur un listing coté au-dessus de ce prix (stables / mauvais cotations) */
   maxPriceUsd: number;
@@ -87,7 +87,7 @@ export function maxscalpDefaults(): MaxScalpConfig {
     firstTakeUsd: 1.2,
     ladderTakePct: 0.2,
     minLiquidityUsd: 5_000,
-    minVol5mUsd: 30_000,
+    minVol5mUsd: 50_000,
     maxPriceUsd: 0.05,
     rugExitPct: 0.6,
     moonStopDropPct: 0.6,
@@ -332,29 +332,42 @@ export class MaxScalper {
    * gelé au millième pendant 1h (pool relancée par son dev — le mark frais ré-émis à chaque refresh
    * désamorce le churn "dead listing" qui gère déjà les baisses). Un vrai pump = escalade multi-ticks;
    * un relancement = un saut vertical suivi d'un plateau gelé, sans bougie OHLCV qui confirme.
+   * openedMs: si la pool qui cote désormais le mint a été CRÉÉE APRÈS l'ouverture de la position,
+   * le market d'entrée n'existe plus → purge même si une bougie "confirme" (elle est la bougie de
+   * la pool relancée — v10.2bis, STREAM au boot: repriceAll a écrit la bougie du nouveau pool et le
+   * moon stop a liquidé au clamp entry×20 = +90$ de cash fiction, trade id 82).
    * Retourne le dernier niveau légitime d'avant-jump si purge, sinon null.
    */
-  private fakePumpCheck(mint: string): number | null {
+  private fakePumpCheck(mint: string, openedMs: number): number | null {
     const rows = this.db
       .prepare("SELECT ts_ms, price_usd, src FROM price_ticks WHERE mint = ? ORDER BY ts_ms DESC LIMIT 32")
       .all(mint) as { ts_ms: number; price_usd: number; src: string }[];
     if (rows.length < 2) {return null;}
     const top = rows[0]!.price_usd;
-    // premier niveau distinct sous le mark courant = dernier prix légitime
-    let j = 1;
-    while (j < rows.length && rows[j]!.price_usd === top) {j += 1;}
-    if (j >= rows.length) {return null;}
-    const legit = rows[j]!.price_usd;
-    if (!(legit > 0) || top < legit * this.cfg.fakePumpJump) {return null;}
-    // le mark doit être gelé (identique, aucune autre valeur) depuis fakePumpStallMs — le début
-    // du niveau courant est le ts du plus VIEUX tick au prix top. En dessous, on attend.
-    const stallStart = rows[j - 1]!.ts_ms;
-    if (Date.now() - stallStart < this.cfg.fakePumpStallMs) {return null;}
-    // une bougie OHLCV après le saut confirme un vrai marché → pas une fiction
-    const confirm = this.db
-      .prepare("SELECT 1 AS x FROM price_ticks WHERE mint = ? AND src = 'candle' AND ts_ms > ? LIMIT 1")
-      .get(mint, stallStart);
-    if (confirm) {return null;}
+    // régime légitime = la ligne la plus RÉCENTE sous top/fakePumpJump (des bougies intermédiaires
+    // de la pool relancée à ±quelques % du top ne cassent plus la structure: STREAM mark 7.36e-3,
+    // bougie repriceAll 7.35e-3, legit 1.98e-4)
+    let legitIdx = -1;
+    for (let i = 1; i < rows.length; i += 1) {
+      if (rows[i]!.price_usd < top / this.cfg.fakePumpJump) {legitIdx = i; break;}
+    }
+    if (legitIdx === -1) {return null;}
+    const legit = rows[legitIdx]!.price_usd;
+    if (!(legit > 0)) {return null;}
+    // jumpStart = la ligne juste après le régime légitime (le tick le plus récent au-dessus du régime)
+    const jumpStart = rows[legitIdx - 1]!.ts_ms;
+    if (Date.now() - jumpStart < this.cfg.fakePumpStallMs) {return null;}
+    // une bougie OHLCV d'une pool existante AVANT l'entrée confirme un vrai marché → pas une
+    // fiction. Une pool née APRÈS l'opening = relancement: la bougie est celle du nouveau pool.
+    // (meta inconnue → on ne peut PAS présumer le relancement: la bougie reste probante)
+    const meta = getTokenMeta(this.db, mint);
+    const relaunched = meta !== null && meta.poolCreatedMs !== null && meta.poolCreatedMs > openedMs + 300_000;
+    if (!relaunched) {
+      const confirm = this.db
+        .prepare("SELECT 1 AS x FROM price_ticks WHERE mint = ? AND src = 'candle' AND ts_ms > ? LIMIT 1")
+        .get(mint, jumpStart);
+      if (confirm) {return null;}
+    }
     return legit;
   }
 
@@ -494,7 +507,7 @@ export class MaxScalper {
       }
       // v10.2 fake pump: priorité absolue — saut discovery ≥ fakePumpJump sans bougie + gel ≥ fakePumpStallMs
       // → purge au dernier niveau légitime × haircut (le NAV courant est compté sur une fiction)
-      const fakeLegit = this.fakePumpCheck(pos.mint);
+      const fakeLegit = this.fakePumpCheck(pos.mint, pos.openedMs);
       if (fakeLegit !== null) {
         const purgePrice = fakeLegit * this.cfg.fakePumpHaircut;
         this.rec("trade", `${pos.symbol}: FAKE PUMP PURGE — discovery sauté ×${(price / fakeLegit).toFixed(0)} en un tick sans bougie puis gelé ≥${Math.round(this.cfg.fakePumpStallMs / 60_000)} min → purge au niveau légitime ${fakeLegit.toExponential(2)} ×${this.cfg.fakePumpHaircut} = ${purgePrice.toExponential(2)}`);

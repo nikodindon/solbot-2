@@ -138,13 +138,13 @@ describe("MaxScalper garde-fous anti-rug", () => {
     expect(listTrades(db, {}).filter((t) => t.side === "buy")).toHaveLength(0);
   });
 
-  it("filtre entrée v8→v10.1: vol5m < minVol5mUsd (30k$) refusé — jamais sous le cratère 20-30k", async () => {
-    const dead = { ...CAND, vol5mUsd: 10_000 };
+  it("filtre entrée v8→v10.2: vol5m < minVol5mUsd (50k$) refusé — la bande 30-50k live a brûlé 3.2$/lot en une aprem (v10.1)", async () => {
+    const dead = { ...CAND, vol5mUsd: 30_000 };
     const s = scalperFor(db, new LadderFeed([dead]));
     await s.tick();
     expect(listTrades(db, {}).filter((t) => t.side === "buy")).toHaveLength(0);
     // exactement à la limite → accepté
-    const alive = { ...CAND, vol5mUsd: 30_000 };
+    const alive = { ...CAND, vol5mUsd: 50_000 };
     const s2 = scalperFor(db, new LadderFeed([alive]));
     await s2.tick();
     expect(listTrades(db, {}).filter((t) => t.side === "buy")).toHaveLength(1);
@@ -564,5 +564,30 @@ describe("v10.2 — garde anti fake-pump (STREAM: pool relancée, discovery ×37
     await s.tick();
     expect(listTrades(db, {}).filter((t) => t.reason === "fake pump purge")).toHaveLength(0);
     expect(listPositions(db, true)).toHaveLength(1);         // le lot court encore (cette fois le paper n'y croit pas plus qu'avant: clamp entry×20 gère les ventes)
+  });
+
+  it("bougie 'confirmante' mais pool créée APRÈS l'ouverture des lots (pool relancée au boot: STREAM id82) → purge quand même", async () => {
+    const now = Date.now();
+    addLot(db, "STREAM_mint", "STREAM", 36_000, 1.4e-4, now - 2 * 3_600_000);
+    const { insertTicks, upsertTokenMeta } = await import("../../src/state/market.js");
+    const T = (ts: number, price: number, src: "discovery" | "candle" = "discovery") => ({ ts, mint: "STREAM_mint", price, liquidity: 80_000, volumeDelta: null, src });
+    insertTicks(db, [
+      T(now - 20 * 60_000, 1.4e-4),
+      T(now - 19 * 60_000, 1.98e-4),
+      T(now - 18 * 60_000, 7.36e-3),
+      T(now - 5 * 60_000, 7.35e-3, "candle"), // la bougie du NOUVEAU pool (celle qu'écrit repriceAll au boot)
+      T(now - 3 * 60_000, 7.36e-3),
+    ]);
+    // token_meta: la pool qui cote désormais a été créée 1h après l'ouverture des lots → relaunch
+    upsertTokenMeta(db, { mint: "STREAM_mint", symbol: "STREAM", decimals: 6, isVerified: null, liquidityUsd: 80_000, poolCreatedMs: now - 1 * 3_600_000 }, now);
+    paperCashSet(db, 0);
+    const s = scalperFor(db, new LadderFeed([], 0), { sweepTriggerUsd: 1e9, deadLotMinAgeMin: 999 });
+    await s.tick();
+    const purges = listTrades(db, {}).filter((t) => t.reason === "fake pump purge");
+    expect(purges).toHaveLength(1);
+    const priceNet = purges[0]!.spendUsd! / purges[0]!.qty!;
+    expect(priceNet).toBeLessThanOrEqual(1.98e-4);           // purge au niveau légitime ×haircut, pas de clamp ×20
+    expect(listPositions(db, true)).toHaveLength(0);
+    expect(paperCashGet(db, 0)).toBeLessThan(5);
   });
 });
