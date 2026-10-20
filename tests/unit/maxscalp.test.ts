@@ -69,41 +69,41 @@ describe("MaxScalper (loterie ×2)", () => {
     expect(lines.some((l) => l.includes("NAV"))).toBe(true);
   });
 
-  it("x2: premier take = 1.2$ prélevés, sol continue, pas de SL", async () => {
+  it("v11.1 kickoff: premier take à ×1.4-2.2 (25% du sol prélevés), sol continue, pas de SL", async () => {
     const s1 = scalperFor(db, new LadderFeed([CAND]));
     await s1.tick();
-    // prix ×2.2 vs valeur nette d'entrée ≈0.96$ → position doublée
+    // prix ×2.2 vs valeur nette d'entrée ≈0.96$ → position doublée; le premiere take est le KICKOFF (25%)
     const s2 = scalperFor(db, new LadderFeed([], 0.022));
     await s2.tick();
     const trades = listTrades(db, {});
     expect(trades).toHaveLength(2);
     expect(trades[1]!.side).toBe("sell");
-    // take de ~1.2$ (frais inclus): proceeds net ≈ 1.0-1.25$
-    expect(trades[1]!.spendUsd).toBeGreaterThan(0.9);
-    expect(trades[1]!.spendUsd).toBeLessThan(1.25);
+    // kickoff = 25% de la valeur (~2$) → proceeds net ≈ 0.45-0.55$
+    expect(trades[1]!.spendUsd).toBeGreaterThan(0.4);
+    expect(trades[1]!.spendUsd).toBeLessThan(0.55);
     // sol restant en position
     const [pos] = listPositions(db, true);
     expect(pos).toBeTruthy();
   });
 
-  it("chain x2: à chaque doublement du sol, 20% prélevés", async () => {
+  it("chain: kickoff à ×1.4, puis ladder 20% du sol à chaque doublement", async () => {
     const s1 = scalperFor(db, new LadderFeed([CAND]));
     await s1.tick();
     const cashBefore = paperCashGet(db, 100);
-    // premier x2 → take 1.2$
+    // premier ×2.2 → kickoff 25%
     await scalperFor(db, new LadderFeed([], 0.022), { sweepTriggerUsd: 1e9 }).tick();
-    // deuxième x2 du sol restant
+    // deuxième doublement du sol restant → ladder 20%
     await scalperFor(db, new LadderFeed([], 0.06), { sweepTriggerUsd: 1e9 }).tick();
-    // troisième x2
+    // troisième doublement
     await scalperFor(db, new LadderFeed([], 0.14), { sweepTriggerUsd: 1e9 }).tick();
     const trades = listTrades(db, {});
     const sells = trades.filter((t) => t.side === "sell");
     expect(sells.length).toBe(3);
-    // le 1er take ~1.2$ brut; les suivants = 20% du sol courant
-    expect(sells[1]!.spendUsd).toBeGreaterThan(0.35);   // 20% du sol après 1er take ×6
-    expect(sells[1]!.spendUsd).toBeLessThan(0.55);
-    expect(sells[2]!.spendUsd).toBeGreaterThan(0.6);    // 20% du sol ×14
-    expect(sells[2]!.spendUsd).toBeLessThan(1.0);
+    // le kickoff ~25% de 2$; les suivants = 20% du sol courant (croissant)
+    expect(sells[0]!.spendUsd).toBeGreaterThan(0.4);
+    expect(sells[0]!.spendUsd).toBeLessThan(0.55);
+    expect(sells[1]!.spendUsd).toBeGreaterThan(sells[0]!.spendUsd);   // 20% du sol après kickoff ×6
+    expect(sells[2]!.spendUsd).toBeGreaterThan(sells[1]!.spendUsd);   // 20% du sol ×14
     // cash augmenté au total
     expect(paperCashGet(db, 100)).toBeGreaterThan(cashBefore);
   });
@@ -283,27 +283,66 @@ describe("MaxScalper v3 — sweep USDT + recycle cash", () => {
     expect(kvGetJson<number>(db, "maxscalpSweptUsd", 0)).toBe(2);
   });
 
-  it("sweep v11: une moon flottante NON réalisée (mark ×1.5, pas de take) ne fait PAS sweeper — run 7: 160$ sur des NAV plâtrés", async () => {
+  it("v11.1 kickoff: à ×1.4 le 25% part, ref rebasé à 0.75×value — le ladder ne re-take que 2× le ref (plus tard)", async () => {
+    await scalperFor(db, new LadderFeed([CAND]), { sweepTriggerUsd: 1e9 }).tick();   // entrée 1$
+    // ×1.45 du mark: friction d'entrée 2% → value/ref ≈ ×1.417 ≥ 1.4 → kickoff 25% du sol
+    await scalperFor(db, new LadderFeed([], 0.0145), { sweepTriggerUsd: 1e9 }).tick();
+    let sells = listTrades(db, {}).filter((t) => t.side === "sell");
+    expect(sells).toHaveLength(1);
+    const kick = sells[0]!.spendUsd;
+    expect(kick).toBeGreaterThan(0.3);          // 25% de ~1.39, net de frais
+    expect(kick).toBeLessThan(0.42);
+    // ref rebasé à 0.75×value ≈1.04 avec qty restant 72 tok: 2×ref exige mark ≥ 0.0289
+    // → mark ×2 du prix (0.02: value 1.44 sur le sol restant) → PAS de take
+    await scalperFor(db, new LadderFeed([], 0.02), { sweepTriggerUsd: 1e9 }).tick();
+    sells = listTrades(db, {}).filter((t) => t.side === "sell");
+    expect(sells).toHaveLength(1);
+    // au-dessus de 2×ref (mark 0.03 → value restante 2.16 ≥ 2.08) → ladder 20% reprend
+    await scalperFor(db, new LadderFeed([], 0.03), { sweepTriggerUsd: 1e9 }).tick();
+    sells = listTrades(db, {}).filter((t) => t.side === "sell");
+    expect(sells).toHaveLength(2);
+    expect(sells[1]!.spendUsd).toBeGreaterThan(kick);   // ladder 20% du sol ×3 > kickoff
+  });
+
+  it("v11.1 humeur: réalisé net (1h) ≤ −5$ → AUCUNE entrée au tick suivant, reprise dès que la fenêtre se vide", async () => {
+    const { insertTrade } = await import("../../src/state/trades.js");
+    insertTrade(db, {
+      tsMs: Date.now() - 120_000, mode: "paper", strategy: "maxscalp", mint: "RUGZ_mint", symbol: "RUGZ",
+      side: "sell", spendUsd: 2.4, qty: 0.9, priceUsd: 0.0027, status: "simulated", realizedPnlUsd: -6.1,
+      reason: "rug exit (test)-HUMEUR",
+    });
+    const s1 = scalperFor(db, new LadderFeed([CAND]));
+    const lines1 = await s1.tick();
+    expect(listTrades(db, {}).filter((t) => t.side === "buy" && t.symbol === "MAX")).toHaveLength(0);   // pause
+    expect(lines1.some((l) => l.includes("pause des entrées"))).toBe(true);
+    // la même pause ne bloque pas éternellement: backdate le sell de −6.1$ à −3h → fenêtre 1h vide → entrées OK
+    db.prepare("UPDATE trades SET ts_ms = ? WHERE mint = ?").run(Date.now() - 3 * 3_600_000, "RUGZ_mint");
+    const lines2 = await scalperFor(db, new LadderFeed([CAND])).tick();
+    expect(listTrades(db, {}).some((t) => t.side === "buy" && t.symbol === "MAX")).toBe(true);
+    expect(lines2.some((l) => l.includes("pause des entrées"))).toBe(false);
+  });
+
+  it("sweep v11: une moon flottante NON réalisée (mark ×1.3, sous le kickoff) ne fait PAS sweeper — run 7: 160$ sur des NAV plâtrés", async () => {
     const s = scalperFor(db, new LadderFeed([], 0), { sweepTriggerUsd: 100.05, sweepUsd: 2 });
     addLot(db, "FLOAT_mint", "FLOAT", 96, 0.01, Date.now() - 60_000);
     const { insertTicks } = await import("../../src/state/market.js");
-    insertTicks(db, [{ ts: Date.now() - 10_000, mint: "FLOAT_mint", price: 0.015, liquidity: 20_000, volumeDelta: 5_000 }]); // ×1.5 flottant: NAV papier 100.44 > trigger mais réalisé 0
+    insertTicks(db, [{ ts: Date.now() - 10_000, mint: "FLOAT_mint", price: 0.013, liquidity: 20_000, volumeDelta: 5_000 }]); // ×1.3 flottant: NAV papier 101.2 > trigger, sous le kickoff 1.4, réalisé 0
     await s.tick();
     expect(kvGetJson<number>(db, "maxscalpSweptUsd", 0)).toBe(0);   // l'ancien NAV-mark rule aurait sweepé ICI
     expect(paperCashGet(db, 100)).toBe(100);       // aucune vente, aucun prélèvement
   });
 
   it("recycle: cash vide → 50% des positions en profit oldest-first jusqu'à re-acheter", async () => {
-    await scalperFor(db, new LadderFeed([CAND])).tick();                 // 1 lot MAX (mark 0.019 > entrée 0.01, < 2×)
+    await scalperFor(db, new LadderFeed([CAND])).tick();                 // 1 lot MAX (mark défaut 0.019 > entrée 0.01, < 2×)
     addLot(db, "OTHX_mint", "OTHX", 94, 0.01, Date.now() - 60_000);      // lot vieux de 60 s → plus ancien que le lot MAX (acheté au tick)
     paperCashSet(db, 0);                                                // vider le cash
-    // ×1.9: en profit MAIS pas de ×2 → pas de take ladder → le recycle doit agir
+    // ×1.3: en profit MAIS sous le kickoff ×1.4 → pas de take → le recycle doit agir
     const other = { ...CAND, mint: "OTHER_mint", symbol: "OTHR" };
-    await scalperFor(db, new LadderFeed([other], 0.019)).tick();
+    await scalperFor(db, new LadderFeed([other], 0.013)).tick();
     const sells = listTrades(db, {}).filter((t) => t.side === "sell").filter((t) => t.reason === "recycle cash");
-    expect(sells).toHaveLength(2);                                       // MAX puis OTHX hydraté
+    expect(sells).toHaveLength(2);                                    // MAX puis OTHX hydraté
     expect(sells.map((t) => t.symbol).join("")).toBe("OTHXMAX");        // plus ancien d'abord
-    const lines = await scalperFor(db, new LadderFeed([other], 0.019)).tick();
+    const lines = await scalperFor(db, new LadderFeed([other], 0.013)).tick();
     expect(lines.length).toBeGreaterThan(0);
     expect(listTrades(db, {}).some((t) => t.side === "buy" && t.symbol === "OTHR")).toBe(true);
   });
@@ -523,7 +562,8 @@ describe("v7 — garde anti-fausse lune (suivre fake moons)", () => {
     expect(sells.length).toBeGreaterThanOrEqual(1);
     expect(sells[0]!.expectedPriceUsd).toBeCloseTo(0.2, 9);   // clamp entry×20 = 0.01×20
     expect(sells[0]!.spendUsd).toBeLessThan(20);
-    expect(paperCashGet(db, 0)).toBeLessThan(102);            // pas de +9600$ fiction
+    // v11.1: le kickoff prélève 25% du clamp (≈4.6$ net sur le sol 19.2$) — jamais les 2300$ fiction
+    expect(paperCashGet(db, 0)).toBeLessThan(105.5);            // pas de +9600$ fiction
   });
 });
 

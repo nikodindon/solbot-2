@@ -253,6 +253,16 @@ Base vierge (100$, 0 position), deux garde-fous de vérité :
 - **Le sweep change de base (leçon du run 7)** : l'ancien trigger NAV-mark a prélevé 160$ pendant l'ère des marks gelés-faux (une part de cette fortune n'existait pas). v11: trigger = **cash + max(0, réalisé net)** — les marks flottants, mêmes ×37, ne font plus sortir un centime; le take ×1 qui réalise du profit devient le déclencheur naturel du prélèvement. `sweepTriggerUsd = initialUsd + 5` (dérivé), réglable par override.
 - **Reset à 200$** : DB archivée (`maxscalp-run7-stream.sqlite`), `MAXSCALP_INITIAL_USD=200` (env, défaut 500) — le trigger sweep devient 205$. La question du run 8: le take ladder (prouvé sur STREAM) suffit-il à faire vivre un capital 200$ sur la bande ≥50k pure, sans que les ruggers ne l'entament plus vite que les moons ne la remplissent.
 
+### v11.1 — kickoff ×1.4 + humeur mauvaise (mid-run 8)
+
+- **Run 8 à 4h45** : NAV 199.71, courbe 198.9-200.5 (dd ~0.6%), **0 rug exit** (le retour 50k revient à une bande saine), réalisé −0.81$ (5 idle exits), book 36 lots +1.9 flottant, sweep reposé (v11: rien sur du fiction).
+- **Problème constaté** : 41 achat vs 5 sorties en 4h45 — le book sature bien avant que le premier ×2 arrive. Le take ladder est très rare (≤ ×2 sur le ref) : les ×1.4 « perdus en route » ne sont jamais encaissés.
+- **Kickoff** : premier lot (takes 0) qui touche **×1.4 du ref → prélever 25% du sol**, ref rebasé à 0.75×value, le ladder (×2 du ref) reprend ensuite intact. Couverture rug précoce + l'encaissement devient fréquent. Tests : kickoff take, ref-rebasé (là où le vieux ×2 attendait 0.024 mark, le sol rebasé exige 0.03 — le débat couvre le coup), chain mise à jour.
+- **Moon stop resserré** : `moonStopDropPct 0.6 → 0.35` — un pic ×2 qui retombe ne doit pas redonner la moitié (les tests existants −70% passent toujours: purge plus tôt).
+- **Humeur mauvaise** : réalisé net (1h) ≤ **−5$** → **pause des entrées** (sorties/churn/recycle continuent), reprise dès que la fenêtre glisse. Le tuer du run 7 (bande 30-50k, 27 ruggers 5 min) ne se passe plus deux fois : on ne finance pas la suite d'une série de ruggers.
+- **Instrumentation** : raison d'achat taguée `maxscalp entry (loterie, turbo|base)` → les bilans par bande d'entrée live (50-100k vs ≥100k) débloquent le sizing du prochain run.
+-POSITION: relance du run 8 avec v11.1 (même DB, 200$).
+
 ---
 
 ## Leçons générales (running notes)

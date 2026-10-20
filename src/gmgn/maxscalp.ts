@@ -32,6 +32,11 @@ export interface MaxScalpConfig {
   initialUsd: number;
   /** premier take: récupérer ce montant en $ (vs la position doublée) */
   firstTakeUsd: number;
+  /** v11.1 kickoff: premier lot (takes 0) qui touche kickoffTakeX × refUsd → prélever kickoffTakePct du sol, ref basé sur value−kick */
+  kickoffTakeX: number;
+  kickoffTakePct: number;
+  /** v11.1 anti-journée-pourrie: réalisé net (1h) ≤ ça → PAUSE des entrées (les sorties continuent) — la bande 30-50k du run 7 a fait −86$ en 5 min sans pouvoir être rattrapée */
+  badDayRealizedUsd: number;
   /** ensuite: % du sol prélevé à chaque nouveau ×2 */
   ladderTakePct: number;
   minLiquidityUsd: number;
@@ -85,12 +90,16 @@ export function maxscalpDefaults(initialUsd = 500): MaxScalpConfig {
     initialUsd,
     tradeUsd: 3,
     firstTakeUsd: 1.2,
+    /** v11.1: resserre le stop gagnant — un pic ×2 qui retombe ne doit pas redonner la moitié */
+    moonStopDropPct: 0.35,
+    kickoffTakeX: 1.4,
+    kickoffTakePct: 0.25,
+    badDayRealizedUsd: -5,
     ladderTakePct: 0.2,
     minLiquidityUsd: 5_000,
     minVol5mUsd: 50_000,
     maxPriceUsd: 0.05,
     rugExitPct: 0.6,
-    moonStopDropPct: 0.6,
     maxLotsPerSymbol: 2,
     /** v11: sécurisation au-dessus de capital initial + 5 — le trigger porte sur le CAPITAL GARANTI (cash + réalisé net), jamais les marks flottants (run 7: 160$ swept pendant l'ère fake-marks) */
     sweepTriggerUsd: initialUsd + 5,
@@ -303,6 +312,14 @@ export class MaxScalper {
               delete ladder[p.mint];
               kvSetJson(this.db, "maxscalpLadder", ladder);
               this.blacklistRug(p.symbol);
+            } else if (st.takes === 0 && value >= this.cfg.kickoffTakeX * st.refUsd) {
+              // v11.1 kickoff: premier frôlement ×1.4 → prélever 25% du sol (couverture rug précoce), sol courir sans SL
+              const takeUsd = value * this.cfg.kickoffTakePct;
+              if (await this.partialSell(p, bar.close, this.cfg.kickoffTakePct, st, undefined, { ageMs: 0, src: "candle" })) {
+                st.refUsd = value - takeUsd;
+                st.takes += 1;
+                kvSetJson(this.db, "maxscalpLadder", ladder);
+              }
             } else if (value >= 2 * st.refUsd) {
               const takeUsd = st.takes === 0 ? this.cfg.firstTakeUsd : value * this.cfg.ladderTakePct;
               const takePct = Math.min(0.9, takeUsd / value);
@@ -540,7 +557,15 @@ export class MaxScalper {
           continue;
         }
       }
-      if (fresh && value >= 2 * st.refUsd) {
+      if (fresh && st.takes === 0 && value >= this.cfg.kickoffTakeX * st.refUsd) {
+        // v11.1 kickoff: premier frôlement ×1.4 → prélever 25% du sol (couverture rug précoce), sol courir sans SL
+        const takeUsd = value * this.cfg.kickoffTakePct;
+        if (await this.partialSell(pos, price, this.cfg.kickoffTakePct, st, undefined, { ageMs: markAgeMs, src: markSrc })) {
+          st.refUsd = value - takeUsd;
+          st.takes += 1;
+          step(`KICKOFF ${pos.symbol} — ${(takeUsd).toFixed(2)}$ prélevés à ×${(value / (pos.qty * pos.avgEntryUsd)).toFixed(1)}, sol courir sans stop`);
+        }
+      } else if (fresh && value >= 2 * st.refUsd) {
         const takeUsd = st.takes === 0 ? this.cfg.firstTakeUsd : value * this.cfg.ladderTakePct;
         const takePct = Math.min(0.9, takeUsd / value);
         if (takePct > 0) {
@@ -571,6 +596,16 @@ export class MaxScalper {
     }
 
     // === 3) entrées sur tout candidat — v10: lot calibré par bande de vol5m (50-100k$ → 3$, ≥100k$ → 5$) ===
+    // v11.1 humeur: réalisé net (1h) ≤ badDayRealizedUsd → PAUSE des entrées (les sorties continuent):
+    // ni crops ni loterie — on ne finance pas la suite d'une série de ruggers
+    const moodRow = this.db
+      .prepare("SELECT COALESCE(SUM(realized_pnl_usd), 0) AS r FROM trades WHERE status IN ('filled','simulated') AND side='sell' AND ts_ms >= ? AND ts_ms <= ?")
+      .get(now - 3_600_000, now) as { r: number };
+    const moodOk = moodRow.r > this.cfg.badDayRealizedUsd;
+    if (!moodOk) {
+      this.rec("info", `HUMEUR: réalisé net (1h) ${moodRow.r.toFixed(2)}$ ≤ ${this.cfg.badDayRealizedUsd}$ → pause des entrées (sorties continuent)`);
+      step(`HUMEUR MAUVAISE: réalisé net (1h) ${moodRow.r.toFixed(2)}$ → pause des entrées, sorties continuent`);
+    }
     let buys = 0;
     const positionsAll = listPositions(this.db, true);
     const symbolCount = new Map<string, number>();
@@ -583,7 +618,7 @@ export class MaxScalper {
     const staleBefore = now - 24 * 3_600_000;
     for (const [mint, ts] of Object.entries(seen)) {if (ts < staleBefore) {delete seen[mint];}}
     for (const c of candsOk) {seen[c.mint] = now;}
-    for (const c of candsOk) {
+    for (const c of moodOk ? candsOk : []) {
       const held = getPosition(this.db, c.mint);
       if (held) {continue;}
       if (rug[c.symbol]) {
@@ -600,7 +635,7 @@ export class MaxScalper {
         this.rec("reject", `${c.symbol}: cap familles — déjà ${(symbolCount.get(c.symbol) ?? 0)} lot(s) du même nom de la range, pas de lot supplémentaire`);
         continue;
       }
-      await this.buy(c, lotUsd);
+      await this.buy(c, lotUsd, this.lotBand(c));
       symbolCount.set(c.symbol, (symbolCount.get(c.symbol) ?? 0) + 1);
       seen[c.mint] = now;
       buys += 1;
@@ -630,7 +665,12 @@ export class MaxScalper {
     return c.vol5mUsd >= this.cfg.turboVol5mUsd ? this.cfg.tradeUsdTurbo : this.cfg.tradeUsd;
   }
 
-  private buy(c: Candidate, lotUsd: number): void {
+  /** v11.1: étiquette la bande d'entrée (base 50-100k$ / turbo ≥100k$) sur la raison pour le bilan par bande live */
+  private lotBand(c: Candidate): string {
+    return c.vol5mUsd >= this.cfg.turboVol5mUsd ? "turbo" : "base";
+  }
+
+  private buy(c: Candidate, lotUsd: number, band: string): void {
     const ts = Date.now();
     const f = simulateBuy(lotUsd, c.priceUsd, {
       feeBps: this.cfg.feeBps,
@@ -661,7 +701,7 @@ export class MaxScalper {
       feeBps: this.cfg.feeBps,
       solFee: f.solFee,
       status: "simulated",
-      reason: "maxscalp entry (loterie)",
+      reason: `maxscalp entry (loterie, ${band})`,
       note: `liq ${(c.liquidityUsd / 1000).toFixed(0)}k$ vol5m ${(c.vol5mUsd / 1000).toFixed(0)}k$`,
     });
   }
