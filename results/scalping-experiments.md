@@ -220,6 +220,16 @@ Base vierge (100$, 0 position), deux garde-fous de vérité :
 - **Fair-play noté** : la bande ≥50k n>17/9 uniquement — v10 est une mesure, pas une certitude. Critère d'arrêt : si en 2-3h la bande turbo fait la même casse que 20-30k, le signal vol n'était pas le bon discriminateur.
 - **DB neuve à 500$** (run 6 archivé `maxscalp-run6-churn.sqlite`, ~−51$ de churn/fees en 11h). Premier tick : FABLES/SO/ALLOX langé en turbo 5$ (vol5m 219k/209k/215k — exactement la bande visée).
 
+### Run 7 (v10) — premier bilan 11 h : fortune 508.11$, la thèse turbo tient le choc
+
+- **Capital** 500 → 503.11 NAV + 5 swept = **508.11 (+1.6%)** ; B&H SOL identique 500 (SPL plat sur la période french défense). Courbe serrée : min 496.8 / max 504.7.
+- **Vitesse** : 33 buys / 123$ investis (21 lots 3$ sur la bande 50-100k, 12 turbo 5$) — flux ~3 entrées/h, la bande-passante discovery ≥50k est le testa stretching, pas le cash (75% du capital en réserve).
+- **Premières statistiques par bande** : les 3 rugs (UHI, HOOT, COLLECTOOOR −1.30/−1.35/−1.39 = −4.04) sont tous venus de la bande 3$-50-100k ; **zéro rug sur les 12 turbo** (n=12, jeune échantillon mais cohérent avec la thèse).
+- **Frais LP à 45 bps** : 0.58$ sur 129$ échangés (vs ~11$ équivalents au plafond fictif 2%()); slippage 3.45% buy / 3.97% sell (plancher vs run 6 : 6.3/12.5).
+- **CT, l'idole du run** : lot turbo 5$ à prix 1.97e-4 → mark 7.23e-4 = **×3.67** (+11.71$ unrealized), ladder posicionning le 1er take au ×2 (19.1$ requis, 16.1$ atteints) — l'algorithme courtise mais n'est pas encore payé.
+- **La book v10** : 30/40 pos, 112.43$ coût → 125.10 mark (+12.67 unrealized), worst-case des losers ~−0.49 (faible vs le fiable intense run 6).
+- **Le programme de poursuite** : (1) si ×2 prends d'être — les takes turbo devraient payer la facture des rugs 3$ ; (2) Documents des events du passage des ruggers pour modifier le fichier take (les rug-exit -1.3$ × 6 en bandes 50-100k = deliver 8$) au seuil de rug exit...
+
 ---
 
 ## Leçons générales (running notes)
