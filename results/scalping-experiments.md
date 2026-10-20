@@ -247,6 +247,12 @@ Base vierge (100$, 0 position), deux garde-fous de vérité :
 - **Le faux débat « cash fiction »**: le moon-stop STREAM du boot (trade id 82, puis 90/91/92 après la restauration chirurgicale du lot) vendait au clamp entry×20 = 2.64e-3 — **en dessous du vrai prix de pool 7.36e-3**: c'était une sortie conservatrice et RÉELLE, pas une fiction. Les purges du ledger (ids 74/87/88/89 puis re-revente propre) se sont soldées à l'identique: cash ~288$, STREAM liquidé, réalisé +90$ pour le token. Enseignements: (1) restaurer un lot en chirurgie sans restaurer son `LadderState` KV fait repartir le cycle take→moon proprement (comportement accepté); (2) le NAV « 501$ » de 14:27 était plâtré par ~90$ de marks gelés-faux d'autres tokens (les vrais morts de l'après-midi), pas par STREAM.
 - **v10.1 (30k) autopsie et RVF**: l'après-midi 30-50k live = 27 `rug exit (rotate)` pour −86.74$, ~−3.2$/lot (bands run-6: neutre −0.03$/sym à l'échantillon → la mémoire d'échantillon ne survit pas au marché live). **Retour 50k** et leçon générale: la bande 30-50k ne se retouche qu'avec un échantillon live ≥ ~2 d de preuve contraire, pas avec l'archive.
 
+### v11 — le sweep ne prélève plus que le capital garanti + reset 200$
+
+- **Run 7 clôture à 479.6$ de fortune réelle (−4.1%)** : takes/moon STREAM +93$, ruggers 30-50k −95$, zombie book 13 lots (~41$ coût, marks morts).
+- **Le sweep change de base (leçon du run 7)** : l'ancien trigger NAV-mark a prélevé 160$ pendant l'ère des marks gelés-faux (une part de cette fortune n'existait pas). v11: trigger = **cash + max(0, réalisé net)** — les marks flottants, mêmes ×37, ne font plus sortir un centime; le take ×1 qui réalise du profit devient le déclencheur naturel du prélèvement. `sweepTriggerUsd = initialUsd + 5` (dérivé), réglable par override.
+- **Reset à 200$** : DB archivée (`maxscalp-run7-stream.sqlite`), `MAXSCALP_INITIAL_USD=200` (env, défaut 500) — le trigger sweep devient 205$. La question du run 8: le take ladder (prouvé sur STREAM) suffit-il à faire vivre un capital 200$ sur la bande ≥50k pure, sans que les ruggers ne l'entament plus vite que les moons ne la remplissent.
+
 ---
 
 ## Leçons générales (running notes)

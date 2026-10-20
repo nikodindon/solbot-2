@@ -265,24 +265,32 @@ describe("MaxScalper v3 — sweep USDT + recycle cash", () => {
   beforeEach(() => {db = freshDb();});
   afterEach(() => {closeDb(db);});
 
-  it("sweep: NAV > trigger → 2$ mis à l'abri, compteur kv, n'itère pas si NAV < trigger", async () => {
-    const s1 = scalperFor(db, new LadderFeed([CAND]), { sweepTriggerUsd: 101, sweepUsd: 2 });
+  it("sweep v11: capital garanti (cash + réalisé net) > trigger → 2$ à l'abri; les marks flottants ne déclenchent RIEN", async () => {
+    // tick 1: achat 1$ → cash 99, réalisé 0 → capital 99 < 100.05 → pas de sweep
+    const s1 = scalperFor(db, new LadderFeed([CAND]), { sweepTriggerUsd: 100.05, sweepUsd: 2 });
     await s1.tick();
-    let sells = listTrades(db, {}).filter((t) => t.side === "sell");
-    expect(sells).toHaveLength(0);       // NAV ~99.5 < 101 → pas de sweep
-    const nav2 = scalperFor(db, new LadderFeed([], 0.031), { sweepTriggerUsd: 101, sweepUsd: 2 }); // ×3.1 → NAV ~102
-    await nav2.tick();
-    sells = listTrades(db, {}).filter((t) => t.side === "sell");
-    expect(sells.length).toBeGreaterThanOrEqual(1);   // le take n°1 est passé avant le sweep
-    const cashAfter = paperCashGet(db, 100);
-    // le sweep est passé dans le même tick que le take: cash = 99.044 +1.187 -2 = 98.23 ±
-    expect(cashAfter).toBeLessThan(99.3);
+    expect(kvGetJson<number>(db, "maxscalpSweptUsd", 0)).toBe(0);
+    // tick 2: mark ×3.1 flottant → take ×1 (réalisé ~+1.09) → capital ~100.09 > 100.05 → sweep
+    const s2 = scalperFor(db, new LadderFeed([], 0.031), { sweepTriggerUsd: 100.05, sweepUsd: 2 });
+    await s2.tick();
     expect(kvGetJson<number>(db, "maxscalpSweptUsd", 0)).toBe(2);
-    // NAV a retombé sous le trigger → pas de double sweep au tick suivant
+    const cashAfter = paperCashGet(db, 100);
+    expect(cashAfter).toBeLessThan(98.2);        // 99 +1.148 −2
+    // capital retombé sous trigger → pas de double sweep au tick suivant
     const before = paperCashGet(db, 100);
-    await scalperFor(db, new LadderFeed([], 0.031), { sweepTriggerUsd: 101, sweepUsd: 2 }).tick();
+    await scalperFor(db, new LadderFeed([], 0.031), { sweepTriggerUsd: 100.05, sweepUsd: 2 }).tick();
     expect(paperCashGet(db, 100)).toBeCloseTo(before, 6);
     expect(kvGetJson<number>(db, "maxscalpSweptUsd", 0)).toBe(2);
+  });
+
+  it("sweep v11: une moon flottante NON réalisée (mark ×1.5, pas de take) ne fait PAS sweeper — run 7: 160$ sur des NAV plâtrés", async () => {
+    const s = scalperFor(db, new LadderFeed([], 0), { sweepTriggerUsd: 100.05, sweepUsd: 2 });
+    addLot(db, "FLOAT_mint", "FLOAT", 96, 0.01, Date.now() - 60_000);
+    const { insertTicks } = await import("../../src/state/market.js");
+    insertTicks(db, [{ ts: Date.now() - 10_000, mint: "FLOAT_mint", price: 0.015, liquidity: 20_000, volumeDelta: 5_000 }]); // ×1.5 flottant: NAV papier 100.44 > trigger mais réalisé 0
+    await s.tick();
+    expect(kvGetJson<number>(db, "maxscalpSweptUsd", 0)).toBe(0);   // l'ancien NAV-mark rule aurait sweepé ICI
+    expect(paperCashGet(db, 100)).toBe(100);       // aucune vente, aucun prélèvement
   });
 
   it("recycle: cash vide → 50% des positions en profit oldest-first jusqu'à re-acheter", async () => {

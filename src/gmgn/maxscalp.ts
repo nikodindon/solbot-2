@@ -80,9 +80,9 @@ export interface MaxScalpConfig {
   turboVol5mUsd: number;
 }
 
-export function maxscalpDefaults(): MaxScalpConfig {
+export function maxscalpDefaults(initialUsd = 500): MaxScalpConfig {
   return {
-    initialUsd: 500,
+    initialUsd,
     tradeUsd: 3,
     firstTakeUsd: 1.2,
     ladderTakePct: 0.2,
@@ -92,8 +92,8 @@ export function maxscalpDefaults(): MaxScalpConfig {
     rugExitPct: 0.6,
     moonStopDropPct: 0.6,
     maxLotsPerSymbol: 2,
-    /** sécurisation: au-dessus de ce NAV, on met sweepUsd de côté (hors wallet du bot) */
-    sweepTriggerUsd: 505,
+    /** v11: sécurisation au-dessus de capital initial + 5 — le trigger porte sur le CAPITAL GARANTI (cash + réalisé net), jamais les marks flottants (run 7: 160$ swept pendant l'ère fake-marks) */
+    sweepTriggerUsd: initialUsd + 5,
     sweepUsd: 5,
     cooldownSec: 60,
     /** churn: lot ≥ 30 min, plat (±0.08$), token sans volume (vu en discovery il y a ≥ 30 min) → purge */
@@ -557,14 +557,16 @@ export class MaxScalper {
     // === 2b) churn: purge des lots idle (vieux + plats + sans volume) pour libérer des slots ===
     await this.purgeIdle(candsOk, step);
 
-    // === 2c) sécurisation: NAV > trigger → sweep USDT hors du wallet du bot ===
+    // === 2c) sécurisation v11: CAPITAL GARANTI (cash + réalisé net — JAMAIS les marks flottants:
+    // run 7 a swept 160$ sur des NAV plâtrés de marks gelés-faux) > trigger → sweep USDT hors du wallet
     const navNow = this.cash() + listPositions(this.db, true).reduce((a, p) => a + p.qty * this.priceOf(p.mint, p.avgEntryUsd), 0);
-    if (navNow > this.cfg.sweepTriggerUsd) {
+    const capital = this.cash() + Math.max(0, realizedPnlTotal(this.db));
+    if (capital > this.cfg.sweepTriggerUsd) {
       const sweptBefore = kvGetJson<number>(this.db, "maxscalpSweptUsd", 0);
       const swept = sweptBefore + this.cfg.sweepUsd;
       kvSetJson(this.db, "maxscalpSweptUsd", swept);
       paperCashSet(this.db, this.cash() - this.cfg.sweepUsd);
-      this.rec("trade", `SECURISE: NAV ${navNow.toFixed(2)}$ > ${this.cfg.sweepTriggerUsd}$ → ${this.cfg.sweepUsd}$ USDT mis à l'abri, total secure ${swept.toFixed(2)}$`);
+      this.rec("trade", `SECURISE: capital garanti ${capital.toFixed(2)}$ (cash ${this.cash().toFixed(2)}$ + réalisé net) > ${this.cfg.sweepTriggerUsd}$ — NAV papier ${navNow.toFixed(2)}$ → ${this.cfg.sweepUsd}$ USDT mis à l'abri, total secure ${swept.toFixed(2)}$`);
       step(`SECURISE ${this.cfg.sweepUsd}$ USDT (total secure ${swept.toFixed(2)}$)`);
     }
 

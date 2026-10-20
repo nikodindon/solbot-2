@@ -24,9 +24,10 @@ export async function runMaxscalp(opts: { once?: boolean } = {}): Promise<void> 
   const db: DB = openDb({ path: dbPath });
   migrate(db);
 
-  // portefeuille frais à 100$ tant qu'aucun trade n'existe (re-boot idempotent)
+  // portefeuille frais à MAXSCALP_INITIAL_USD (défaut 500) tant qu'aucun trade n'existe (re-boot idempotent)
+  const initialUsd = Number(process.env["MAXSCALP_INITIAL_USD"] ?? "") || maxscalpDefaults().initialUsd;
   if (tradeCount(db) === 0) {
-    paperCashSet(db, maxscalpDefaults().initialUsd);
+    paperCashSet(db, initialUsd);
   }
 
   const envGmgn = process.env["GMGN_API_KEY"] ?? null;
@@ -35,7 +36,7 @@ export async function runMaxscalp(opts: { once?: boolean } = {}): Promise<void> 
   const feed = makeFeed(envGmgn, null);
 
   let dynUniverse: { mint: string; symbol: string }[] = [];
-  const scalper = new MaxScalper({ db, cfg: maxscalpDefaults(), feed, universeMutator: (tokens) => { dynUniverse = tokens; } });
+  const scalper = new MaxScalper({ db, cfg: maxscalpDefaults(initialUsd), feed, universeMutator: (tokens) => { dynUniverse = tokens; } });
 
   const dashCfg = { ...cfg, dashboard: { ...cfg.dashboard, port: 4102 } } as typeof cfg;
   Object.defineProperty(dashCfg.universe, "tokens", { get: () => dynUniverse, configurable: true });
