@@ -138,13 +138,13 @@ describe("MaxScalper garde-fous anti-rug", () => {
     expect(listTrades(db, {}).filter((t) => t.side === "buy")).toHaveLength(0);
   });
 
-  it("filtre entrée v8→v10: vol5m < minVol5mUsd (50k$) refusé — le cratère 20-30k de l'analyse run 6", async () => {
+  it("filtre entrée v8→v10.1: vol5m < minVol5mUsd (30k$) refusé — jamais sous le cratère 20-30k", async () => {
     const dead = { ...CAND, vol5mUsd: 10_000 };
     const s = scalperFor(db, new LadderFeed([dead]));
     await s.tick();
     expect(listTrades(db, {}).filter((t) => t.side === "buy")).toHaveLength(0);
     // exactement à la limite → accepté
-    const alive = { ...CAND, vol5mUsd: 50_000 };
+    const alive = { ...CAND, vol5mUsd: 30_000 };
     const s2 = scalperFor(db, new LadderFeed([alive]));
     await s2.tick();
     expect(listTrades(db, {}).filter((t) => t.side === "buy")).toHaveLength(1);
@@ -516,5 +516,53 @@ describe("v7 — garde anti-fausse lune (suivre fake moons)", () => {
     expect(sells[0]!.expectedPriceUsd).toBeCloseTo(0.2, 9);   // clamp entry×20 = 0.01×20
     expect(sells[0]!.spendUsd).toBeLessThan(20);
     expect(paperCashGet(db, 0)).toBeLessThan(102);            // pas de +9600$ fiction
+  });
+});
+
+describe("v10.2 — garde anti fake-pump (STREAM: pool relancée, discovery ×37 gelé 1h)", () => {
+  let db: DB;
+  beforeEach(() => {db = freshDb();});
+  afterEach(() => {closeDb(db);});
+
+  it("saut discovery ×37 en un tick sans bougie + gel ≥15 min → purge au niveau légitime ×0.5", async () => {
+    const now = Date.now();
+    addLot(db, "STREAM_mint", "STREAM", 36_000, 1.4e-4, now - 2 * 3_600_000); // lot ~5$
+    const { insertTicks } = await import("../../src/state/market.js");
+    const T = (ts: number, price: number, src: "discovery" | "candle" = "discovery") => ({ ts, mint: "STREAM_mint", price, liquidity: 80_000, volumeDelta: null, src });
+    insertTicks(db, [
+      T(now - 20 * 60_000, 1.4e-4),    // niveau légitime (entrée, grind)
+      T(now - 19 * 60_000, 1.98e-4),   // dernier niveau légitime d'avant-jump
+      T(now - 18 * 60_000, 7.36e-3),   // la jump fiction ×37 en un seul tick discovery
+      T(now - 10 * 60_000, 7.36e-3),   // gelé…
+      T(now - 3 * 60_000, 7.36e-3),    // …18 min au total, mark "frais" (ré-émis) → dead listing désamorcé
+    ]);
+    paperCashSet(db, 0);
+    const s = scalperFor(db, new LadderFeed([], 0), { sweepTriggerUsd: 1e9, deadLotMinAgeMin: 999 });
+    await s.tick();
+    const purges = listTrades(db, {}).filter((t) => t.reason === "fake pump purge");
+    expect(purges).toHaveLength(1);
+    const priceNet = purges[0]!.spendUsd! / purges[0]!.qty!;
+    expect(priceNet).toBeLessThanOrEqual(1.98e-4);           // vendu AU NIVEAU LÉGITIME ×haircut, jamais au 7.36e-3 fictif
+    expect(priceNet).toBeGreaterThan(5e-5);                  // et pas donné (haircut 0.5 du niveau 1.98e-4)
+    expect(listPositions(db, true)).toHaveLength(0);         // la position fantôme n'existe plus
+    expect(paperCashGet(db, 0)).toBeLessThan(5);             // NAV corrigé: ~3.5$ rapatrié, PAS 267$ de fiction
+  });
+
+  it("saut ×37 MAIS la bougie OHLCV du pool confirme le niveau → pas de purge (pump légitime)", async () => {
+    const now = Date.now();
+    addLot(db, "REAL_mint", "REAL", 36_000, 1.4e-4, now - 2 * 3_600_000);
+    const { insertTicks } = await import("../../src/state/market.js");
+    const T = (ts: number, price: number, src: "discovery" | "candle" = "discovery") => ({ ts, mint: "REAL_mint", price, liquidity: 80_000, volumeDelta: null, src });
+    insertTicks(db, [
+      T(now - 20 * 60_000, 1.4e-4),
+      T(now - 19 * 60_000, 1.98e-4),
+      T(now - 18 * 60_000, 7.36e-3),
+      T(now - 5 * 60_000, 7.35e-3, "candle"), // bougie frais qui confirme le nouveau niveau
+      T(now - 3 * 60_000, 7.36e-3),
+    ]);
+    const s = scalperFor(db, new LadderFeed([], 0), { sweepTriggerUsd: 1e9, deadLotMinAgeMin: 999 });
+    await s.tick();
+    expect(listTrades(db, {}).filter((t) => t.reason === "fake pump purge")).toHaveLength(0);
+    expect(listPositions(db, true)).toHaveLength(1);         // le lot court encore (cette fois le paper n'y croit pas plus qu'avant: clamp entry×20 gère les ventes)
   });
 });

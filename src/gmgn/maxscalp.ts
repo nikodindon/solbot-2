@@ -35,7 +35,7 @@ export interface MaxScalpConfig {
   /** ensuite: % du sol prélevé à chaque nouveau ×2 */
   ladderTakePct: number;
   minLiquidityUsd: number;
-  /** v8: plancher de volume 5 min à l'entrée — l'analyse 380 syms run 6 montre ~ les bandes ≥ 50k sont les seules à espérance positive (20-30k = cratère) */
+  /** v8→v10.1: plancher de volume 5 min à l'entrée. Bandes de l'analyse 380 syms: 20-30k = cratère (JAMAIS sous 30k), 30-50k neutre, ≥50k seules positives possible */
   minVol5mUsd: number;
   /** anti-trap: jamais d'entrée sur un listing coté au-dessus de ce prix (stables / mauvais cotations) */
   maxPriceUsd: number;
@@ -65,6 +65,10 @@ export interface MaxScalpConfig {
   maxEntryMultiple: number;
   /** garde anti-fausse lune: un prix > maxCandleJump × dernier prix discovery (liquide) est une cote douteuse → on vend au prix discovery */
   maxCandleJump: number;
+  /** v10.2 fake pump (STREAM): saut discovery en un tick sans bougie + gel → purge au dernier niveau légitime × haircut */
+  fakePumpJump: number;
+  fakePumpStallMs: number;
+  fakePumpHaircut: number;
   loopSec: number;
   feeBps: number;
   slippageBps: number;
@@ -83,7 +87,7 @@ export function maxscalpDefaults(): MaxScalpConfig {
     firstTakeUsd: 1.2,
     ladderTakePct: 0.2,
     minLiquidityUsd: 5_000,
-    minVol5mUsd: 50_000,
+    minVol5mUsd: 30_000,
     maxPriceUsd: 0.05,
     rugExitPct: 0.6,
     moonStopDropPct: 0.6,
@@ -107,6 +111,10 @@ export function maxscalpDefaults(): MaxScalpConfig {
     maxEntryMultiple: 20,
     /** v7: price > 4× dernier prix discovery (liquide) = pool relancé / cote mule → la vente se fait au prix discovery */
     maxCandleJump: 4,
+    /** v10.2 fake pump (STREAM): discovery ×4+ en un tick sans bougie puis gelé 15 min = pool relancée → purge au niveau légitime × fakePumpHaircut */
+    fakePumpJump: 4,
+    fakePumpStallMs: 15 * 60_000,
+    fakePumpHaircut: 0.5,
     loopSec: 15,
     /** v9: fee = LP pool réel (Raydium/Meteora ~25-60 bps) — l'ancien 200 bps "platform fee Jupiter" n'existe pas par défaut sur le router retail et doublait le péage de churn en fiction */
     feeBps: 45,
@@ -320,6 +328,37 @@ export class MaxScalper {
   }
 
   /**
+   * v10.2 — garde anti fake-pump: STREAM a sauté ×37 en UN tick discovery à 10:02 puis est resté
+   * gelé au millième pendant 1h (pool relancée par son dev — le mark frais ré-émis à chaque refresh
+   * désamorce le churn "dead listing" qui gère déjà les baisses). Un vrai pump = escalade multi-ticks;
+   * un relancement = un saut vertical suivi d'un plateau gelé, sans bougie OHLCV qui confirme.
+   * Retourne le dernier niveau légitime d'avant-jump si purge, sinon null.
+   */
+  private fakePumpCheck(mint: string): number | null {
+    const rows = this.db
+      .prepare("SELECT ts_ms, price_usd, src FROM price_ticks WHERE mint = ? ORDER BY ts_ms DESC LIMIT 32")
+      .all(mint) as { ts_ms: number; price_usd: number; src: string }[];
+    if (rows.length < 2) {return null;}
+    const top = rows[0]!.price_usd;
+    // premier niveau distinct sous le mark courant = dernier prix légitime
+    let j = 1;
+    while (j < rows.length && rows[j]!.price_usd === top) {j += 1;}
+    if (j >= rows.length) {return null;}
+    const legit = rows[j]!.price_usd;
+    if (!(legit > 0) || top < legit * this.cfg.fakePumpJump) {return null;}
+    // le mark doit être gelé (identique, aucune autre valeur) depuis fakePumpStallMs — le début
+    // du niveau courant est le ts du plus VIEUX tick au prix top. En dessous, on attend.
+    const stallStart = rows[j - 1]!.ts_ms;
+    if (Date.now() - stallStart < this.cfg.fakePumpStallMs) {return null;}
+    // une bougie OHLCV après le saut confirme un vrai marché → pas une fiction
+    const confirm = this.db
+      .prepare("SELECT 1 AS x FROM price_ticks WHERE mint = ? AND src = 'candle' AND ts_ms > ? LIMIT 1")
+      .get(mint, stallStart);
+    if (confirm) {return null;}
+    return legit;
+  }
+
+  /**
    * Prix + ancienneté de sa source: snapshot discovery (frais, âge 0) → dernier tick connu en DB
    * (âge = now − ts) → fallback prix d'entrée (âge ∞ = fiction, jamais vendable).
    */
@@ -452,6 +491,19 @@ export class MaxScalper {
       if (!st) {
         st = { refUsd: pos.qty * pos.avgEntryUsd, takes: 0, entryCount: 1, peakUsd: value };
         map[pos.mint] = st;
+      }
+      // v10.2 fake pump: priorité absolue — saut discovery ≥ fakePumpJump sans bougie + gel ≥ fakePumpStallMs
+      // → purge au dernier niveau légitime × haircut (le NAV courant est compté sur une fiction)
+      const fakeLegit = this.fakePumpCheck(pos.mint);
+      if (fakeLegit !== null) {
+        const purgePrice = fakeLegit * this.cfg.fakePumpHaircut;
+        this.rec("trade", `${pos.symbol}: FAKE PUMP PURGE — discovery sauté ×${(price / fakeLegit).toFixed(0)} en un tick sans bougie puis gelé ≥${Math.round(this.cfg.fakePumpStallMs / 60_000)} min → purge au niveau légitime ${fakeLegit.toExponential(2)} ×${this.cfg.fakePumpHaircut} = ${purgePrice.toExponential(2)}`);
+        if (await this.partialSell(pos, purgePrice, 1, st, "fake pump purge", { allowStale: true, src: "discovery" })) {
+          delete map[pos.mint];
+          kvSetJson(this.db, "maxscalpLadder", map);
+          this.blacklistRug(pos.symbol);
+          continue;
+        }
       }
       // moon stop: lot déjà profité (takes ≥ 1) qui retombe depuis son peak → prendre tout le sol
       st.peakUsd = Math.max(st.peakUsd ?? value, value);

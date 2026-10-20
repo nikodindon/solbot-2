@@ -230,6 +230,20 @@ Base vierge (100$, 0 position), deux garde-fous de vérité :
 - **La book v10** : 30/40 pos, 112.43$ coût → 125.10 mark (+12.67 unrealized), worst-case des losers ~−0.49 (faible vs le fiable intense run 6).
 - **Le programme de poursuite** : (1) si ×2 prends d'être — les takes turbo devraient payer la facture des rugs 3$ ; (2) Documents des events du passage des ruggers pour modifier le fichier take (les rug-exit -1.3$ × 6 en bandes 50-100k = deliver 8$) au seuil de rug exit...
 
+### v10.1 & v10.2 — la bande-passante, puis le garde-fou fake-pump (STREAM)
+
+- **v10.1 : seuil d'entrée 50k → 30k$** (la bande 30-50k = neutre −0.03$/sym sur 380 syms ; jamais sous 30k, le cratère 20-30k reste interdit). Motif : le goulot était la bande-passante discovery (~3 entrées/h à ≥50k → 75% du capital assis), pas les slots (churn libère 5/tick + dead exit 60 min + recycle cash).
+- **v10.1 live ~13h** : NAV dérivé 503 → 490 avec STREAM qui affiche un « gros PnL ». Analyse demandée : **legit ?**
+- **STREAM non-legit — signature exacte du fake** (mint `BEywMF9JE6M1YWAKJqWxNC5EtDWSjNykTS3kqBwbxJgP`, lot turbo 5$, vol5m 632k$ à l'entrée) :
+  - 08:06 → 10:01 : grind propre +50% (1.32e-4 → 1.98e-4) ;
+  - **10:02 : UN seul tick discovery ×37** (1.98e-4 → 7.36e-3) puis **gel au millième pendant 1h** — un vrai pump s'imprime en escalade multi-ticks avec volume ; pool relancée par son dev = un saut vertical suivi d'un plateau ;
+  - conséquences : lot marqué **267.82$ dans le NAV** (fiction), le take ladder avait encaissé 0.41$ sur le saut (protectif par accident), et le churn « dead listing » était désamorcé car le mark gelé est ré-émis **frais** (âge 0) à chaque refresh.
+- **v10.2 : garde-fou fake-pump** (trois paramètres: `fakePumpJump 4` ×, `fakePumpStallMs 15 min`, `fakePumpHaircut 0.5`) :
+  - détection par position : mark courant ≥ 4× le dernier niveau différent, **aucune bougie OHLCV** après le début du plateau, plateau gelé ≥ 15 min → **FAKE PUMP PURGE** : vente complète au dernier niveau légitime ×0.5, blacklist du ticker ;
+  - la bougie qui confirme le nouveau niveau = pump légitime → pas de purge (les vrais moons restent valables, les prix > entry×20 restent clampés à la vente comme avant) ;
+  - purge en priorité absolue dans la boucle ladder avant moon/rug/takes.
+  - pièges du chantier : `.all()` sans bind → mint = NULL → 0 rows silencieux, et le binding `undefined` de src fait ROLLBACK la transaction sans trace (les tests le font vieillir avec ticks datés pour le burst age de 18 min).
+
 ---
 
 ## Leçons générales (running notes)
