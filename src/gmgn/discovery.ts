@@ -42,6 +42,13 @@ export interface DiscoveryFeed {
   refresh(): Promise<Candidate[]>;
   latestCandle(mint: string): Promise<Bar | null>;
   snapshotPrice(mint: string): number | null;
+  /**
+   * v10.2bis (anti fake-pump): ts de CRÉATION (ms) de TOUTES les pools qui effectivement coter
+   * le mint — sert à prouver qu'un market postérieur à l'opening d'une position (pool relancée)
+   * remplace celui de l'entrée, même quand la meta n'est pas rafraîchie. Optionnel: son absence
+   * laisse la bougie OHLCV probante (comportement pre-v10.2).
+   */
+  tokenPools?(mint: string): Promise<number[]>;
 }
 
 const num = (v: string | number | undefined): number => {
@@ -255,6 +262,19 @@ export class GeckoFeed implements DiscoveryFeed {
     const row = j?.data?.attributes?.ohlcv_list?.[0];
     if (!row) {return null;}
     return { ts: row[0]!, open: row[1]!, high: row[2]!, low: row[3]!, close: row[4]!, volumeUsd: row[5] ?? 0 };
+  }
+
+  /** v10.2bis: ts de création (ms) de chaque pool qui cote le mint (probe ciblée anti-relaunch). */
+  async tokenPools(mint: string): Promise<number[]> {
+    const j = await this.getJson<PoolResp>(
+      `${this.cfg.baseUrl}/networks/solana/tokens/${mint}/pools?page=1&sort=h24_volume_usd_liquidity_desc`,
+    );
+    const out: number[] = [];
+    for (const p of j?.data ?? []) {
+      const created = p.attributes?.pool_created_at ? Date.parse(p.attributes.pool_created_at) : NaN;
+      if (Number.isFinite(created)) {out.push(created);}
+    }
+    return out;
   }
 }
 

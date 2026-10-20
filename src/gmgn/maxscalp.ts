@@ -338,7 +338,7 @@ export class MaxScalper {
    * moon stop a liquidé au clamp entry×20 = +90$ de cash fiction, trade id 82).
    * Retourne le dernier niveau légitime d'avant-jump si purge, sinon null.
    */
-  private fakePumpCheck(mint: string, openedMs: number): number | null {
+  private async fakePumpCheck(mint: string, openedMs: number): Promise<number | null> {
     const rows = this.db
       .prepare("SELECT ts_ms, price_usd, src FROM price_ticks WHERE mint = ? ORDER BY ts_ms DESC LIMIT 32")
       .all(mint) as { ts_ms: number; price_usd: number; src: string }[];
@@ -357,18 +357,20 @@ export class MaxScalper {
     // jumpStart = la ligne juste après le régime légitime (le tick le plus récent au-dessus du régime)
     const jumpStart = rows[legitIdx - 1]!.ts_ms;
     if (Date.now() - jumpStart < this.cfg.fakePumpStallMs) {return null;}
-    // une bougie OHLCV d'une pool existante AVANT l'entrée confirme un vrai marché → pas une
-    // fiction. Une pool née APRÈS l'opening = relancement: la bougie est celle du nouveau pool.
-    // (meta inconnue → on ne peut PAS présumer le relancement: la bougie reste probante)
+    // une bougie OHLCV d'une pool qui existait AVANT l'entrée confirme un vrai marché. Une pool
+    // née APRÈS = relancement: sa bougie ne prouve rien. Détecte via token_meta (actualisé quand
+    // le mint passe dans la discovery) puis, si besoin, par la probe gecko tokenPools.
+    const confirm = this.db
+      .prepare("SELECT 1 AS x FROM price_ticks WHERE mint = ? AND src = 'candle' AND ts_ms > ? LIMIT 1")
+      .get(mint, jumpStart);
+    if (!confirm) {return legit;}
     const meta = getTokenMeta(this.db, mint);
-    const relaunched = meta !== null && meta.poolCreatedMs !== null && meta.poolCreatedMs > openedMs + 300_000;
-    if (!relaunched) {
-      const confirm = this.db
-        .prepare("SELECT 1 AS x FROM price_ticks WHERE mint = ? AND src = 'candle' AND ts_ms > ? LIMIT 1")
-        .get(mint, jumpStart);
-      if (confirm) {return null;}
+    if (meta !== null && meta.poolCreatedMs !== null && meta.poolCreatedMs > openedMs + 300_000) {return legit;}
+    if (typeof this.feed.tokenPools === "function") {
+      const pools = await this.feed.tokenPools(mint);
+      if (pools.some((t) => t > openedMs + 300_000)) {return legit;}   // pool relancée prouvée
     }
-    return legit;
+    return null;
   }
 
   /**
@@ -507,7 +509,7 @@ export class MaxScalper {
       }
       // v10.2 fake pump: priorité absolue — saut discovery ≥ fakePumpJump sans bougie + gel ≥ fakePumpStallMs
       // → purge au dernier niveau légitime × haircut (le NAV courant est compté sur une fiction)
-      const fakeLegit = this.fakePumpCheck(pos.mint, pos.openedMs);
+      const fakeLegit = await this.fakePumpCheck(pos.mint, pos.openedMs);
       if (fakeLegit !== null) {
         const purgePrice = fakeLegit * this.cfg.fakePumpHaircut;
         this.rec("trade", `${pos.symbol}: FAKE PUMP PURGE — discovery sauté ×${(price / fakeLegit).toFixed(0)} en un tick sans bougie puis gelé ≥${Math.round(this.cfg.fakePumpStallMs / 60_000)} min → purge au niveau légitime ${fakeLegit.toExponential(2)} ×${this.cfg.fakePumpHaircut} = ${purgePrice.toExponential(2)}`);
