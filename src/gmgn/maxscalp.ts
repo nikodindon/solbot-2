@@ -35,8 +35,10 @@ export interface MaxScalpConfig {
   /** v11.1 kickoff: premier lot (takes 0) qui touche kickoffTakeX × refUsd → prélever kickoffTakePct du sol, ref basé sur value−kick */
   kickoffTakeX: number;
   kickoffTakePct: number;
-  /** v11.1 anti-journée-pourrie: réalisé net (1h) ≤ ça → PAUSE des entrées (les sorties continuent) — la bande 30-50k du run 7 a fait −86$ en 5 min sans pouvoir être rattrapée */
+  /** v11.2 anti-journée-pourrie: réalisé net (2h) ≤ ça OU série de ruggers (≥ badDayRugCount / 2h) avec < badDayLatchMin depuis le dernier → PAUSE des entrées (les sorties continuent) */
   badDayRealizedUsd: number;
+  badDayLatchMin: number;
+  badDayRugCount: number;
   /** ensuite: % du sol prélevé à chaque nouveau ×2 */
   ladderTakePct: number;
   minLiquidityUsd: number;
@@ -94,10 +96,13 @@ export function maxscalpDefaults(initialUsd = 500): MaxScalpConfig {
     moonStopDropPct: 0.35,
     kickoffTakeX: 1.4,
     kickoffTakePct: 0.25,
-    badDayRealizedUsd: -5,
+    badDayRealizedUsd: -8,
+    badDayLatchMin: 30,
+    badDayRugCount: 3,
     ladderTakePct: 0.2,
     minLiquidityUsd: 5_000,
-    minVol5mUsd: 50_000,
+    /** v11.2: bande turbo seule — le 50-100k a ruggé en bande à chaque fin de journée (run 7: 27 rugs −86$, run 8: 17 rugs −61$); le ≥100k: 0 rug sur 2 runs */
+    minVol5mUsd: 100_000,
     maxPriceUsd: 0.05,
     rugExitPct: 0.6,
     maxLotsPerSymbol: 2,
@@ -595,16 +600,30 @@ export class MaxScalper {
       step(`SECURISE ${this.cfg.sweepUsd}$ USDT (total secure ${swept.toFixed(2)}$)`);
     }
 
-    // === 3) entrées sur tout candidat — v10: lot calibré par bande de vol5m (50-100k$ → 3$, ≥100k$ → 5$) ===
-    // v11.1 humeur: réalisé net (1h) ≤ badDayRealizedUsd → PAUSE des entrées (les sorties continuent):
-    // ni crops ni loterie — on ne finance pas la suite d'une série de ruggers
+    // === 3) entrées sur tout candidat — v11.2: bande turbo seule (100k$) ===
+    // v11.2 humeur à verrou: réalisé net (2h) ≤ badDayRealizedUsd OU un rug exit de < badDayLatchMin
+    // → PAUSE des entrées (les sorties/churn continuent). v11.1 leçon (run 8): la fenêtre 1h se vide
+    // dès la fin du déluge et les entrées reprenaient à minuit pendant que la bande convalescente
+    // ruggait encore — le verrou sur le DERNIER rug tient la pause 30 min de plus.
     const moodRow = this.db
       .prepare("SELECT COALESCE(SUM(realized_pnl_usd), 0) AS r FROM trades WHERE status IN ('filled','simulated') AND side='sell' AND ts_ms >= ? AND ts_ms <= ?")
-      .get(now - 3_600_000, now) as { r: number };
-    const moodOk = moodRow.r > this.cfg.badDayRealizedUsd;
+      .get(now - 2 * 3_600_000, now) as { r: number };
+    const rugCount2h = this.db
+      .prepare("SELECT COUNT(*) n FROM trades WHERE status IN ('filled','simulated') AND side='sell' AND ts_ms >= ? AND (reason LIKE 'rug exit%' OR reason LIKE 'fake pump purge%')")
+      .get(now - 2 * 3_600_000) as { n: number };
+    const lastRug = this.db
+      .prepare("SELECT MAX(ts_ms) t FROM trades WHERE status IN ('filled','simulated') AND side='sell' AND (reason LIKE 'rug exit%' OR reason LIKE 'fake pump purge%')")
+      .get() as { t: number | null };
+    const rugMinAgo = lastRug.t ? (now - lastRug.t) / 60_000 : Number.POSITIVE_INFINITY;
+    // verrou: une SÉRIE de ruggers (≥ badDayRugCount sur 2h) dont le dernier < badDayLatchMin — un rug isolé ne ferme pas l'offre
+    const latchOk = !(rugCount2h.n >= this.cfg.badDayRugCount && rugMinAgo <= this.cfg.badDayLatchMin);
+    const moodOk = latchOk && moodRow.r > this.cfg.badDayRealizedUsd;
     if (!moodOk) {
-      this.rec("info", `HUMEUR: réalisé net (1h) ${moodRow.r.toFixed(2)}$ ≤ ${this.cfg.badDayRealizedUsd}$ → pause des entrées (sorties continuent)`);
-      step(`HUMEUR MAUVAISE: réalisé net (1h) ${moodRow.r.toFixed(2)}$ → pause des entrées, sorties continuent`);
+      const pourquoi = !latchOk
+        ? `série de ruggers (${rugCount2h.n}/2h) et dernier il y a ${Math.round(rugMinAgo)} min < ${this.cfg.badDayLatchMin} min → verrou`
+        : `réalisé net (2h) ${moodRow.r.toFixed(2)}$ ≤ ${this.cfg.badDayRealizedUsd}$`;
+      this.rec("info", `HUMEUR: ${pourquoi} → pause des entrées (sorties continuent)`);
+      step(`HUMEUR MAUVAISE: ${pourquoi} → pause des entrées, sorties continuent`);
     }
     let buys = 0;
     const positionsAll = listPositions(this.db, true);

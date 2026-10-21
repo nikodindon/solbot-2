@@ -138,24 +138,23 @@ describe("MaxScalper garde-fous anti-rug", () => {
     expect(listTrades(db, {}).filter((t) => t.side === "buy")).toHaveLength(0);
   });
 
-  it("filtre entrée v8→v10.2: vol5m < minVol5mUsd (50k$) refusé — la bande 30-50k live a brûlé 3.2$/lot en une aprem (v10.1)", async () => {
-    const dead = { ...CAND, vol5mUsd: 30_000 };
+  it("v11.2 seuil: vol5m < 100k$ refusé (bande turbo seule) — les 50-100k ont ruggé en bande le soir des deux runs (−86$, −61$)", async () => {
+    const dead = { ...CAND, vol5mUsd: 99_000 };
     const s = scalperFor(db, new LadderFeed([dead]));
     await s.tick();
     expect(listTrades(db, {}).filter((t) => t.side === "buy")).toHaveLength(0);
     // exactement à la limite → accepté
-    const alive = { ...CAND, vol5mUsd: 50_000 };
+    const alive = { ...CAND, vol5mUsd: 100_000 };
     const s2 = scalperFor(db, new LadderFeed([alive]));
     await s2.tick();
     expect(listTrades(db, {}).filter((t) => t.side === "buy")).toHaveLength(1);
   });
 
-  it("v10 sizing: lot 3$ band 50-100k, lot 5$ turbo ≥ 100k, cash insuffisant → rejet propre", async () => {
-    const mid = { ...CAND, vol5mUsd: 80_000, symbol: "MIDBAND" };
+  it("v11.2 sizing: bande 90k sous le seuil turbo refusée, bande 100k+ lot turbo, cash insuffisant → rejet propre", async () => {
+    const mid = { ...CAND, vol5mUsd: 90_000, symbol: "MIDBAND" };
     const s = scalperFor(db, new LadderFeed([mid]), { tradeUsd: 3 });
     await s.tick();
-    const [midBuy] = listTrades(db, {}).filter((t) => t.side === "buy");
-    expect(midBuy!.spendUsd).toBe(3);
+    expect(listTrades(db, {}).filter((t) => t.side === "buy")).toHaveLength(0); // sous le seuil turbo → rien
 
     const db2 = freshDb();
     try {
@@ -304,22 +303,44 @@ describe("MaxScalper v3 — sweep USDT + recycle cash", () => {
     expect(sells[1]!.spendUsd).toBeGreaterThan(kick);   // ladder 20% du sol ×3 > kickoff
   });
 
-  it("v11.1 humeur: réalisé net (1h) ≤ −5$ → AUCUNE entrée au tick suivant, reprise dès que la fenêtre se vide", async () => {
+  it("v11.2 humeur: réalisé(2h) ≤ −8$ → pause entrées; série ≥3 ruggers/2h → verrou 30 min; rug isolé non bloquant (v5atég)", async () => {
+    const { insertTrade } = await import("../../src/state/trades.js");
+    const rugTrade = (pnl: number, minAgo: number) => insertTrade(db, {
+      tsMs: Date.now() - minAgo * 60_000, mode: "paper", strategy: "maxscalp", mint: "RUGZ_mint", symbol: "RUGZ",
+      side: "sell", spendUsd: 2.4, qty: 0.9, priceUsd: 0.0027, status: "simulated", realizedPnlUsd: pnl,
+      reason: "rug exit (test)",
+    });
+    // 1) rug isolé frais (-0.5): PAS de pause (un seul rug ne ferme pas l'offre, 亿元 fenêtre > −8)
+    rugTrade(-0.5, 2);
+    const lines0 = await scalperFor(db, new LadderFeed([CAND])).tick();
+    expect(lines0.some((l) => l.includes("pause des entrées"))).toBe(false);
+    expect(listTrades(db, {}).some((t) => t.side === "buy" && t.symbol === "MAX")).toBe(true);
+    // 2) série: 3 ruggers dont le dernier 2 min (réalisé −8.8 ≤ −8 aussi) → pause
+    rugTrade(-9, 40); rugTrade(-1, 20);
+    const lines1 = await scalperFor(db, new LadderFeed([CAND])).tick();
+    expect(lines1.some((l) => l.includes("pause des entrées"))).toBe(true);
+    expect(listTrades(db, {}).filter((t) => t.side === "buy" && t.symbol === "MAX")).toHaveLength(1); // que le buy de la phase 1
+    // 3) verrou tient TANT QUE le dernier rug < 30 min — même quand la fenêtre 2h s'élide (run 8: essuie-glace 23h → réacheter à minuit pendant les ruggers)
+    db.prepare("UPDATE trades SET realized_pnl_usd = 0.2 WHERE reason = ?").run("rug exit (test)");
+    const lines2 = await scalperFor(db, new LadderFeed([CAND])).tick();
+    expect(lines2.some((l) => l.includes("pause des entrées"))).toBe(true);
+    // 4) verrou écoulé (dernier rug backdaté à −31 min) → entrées reviennent
+    db.prepare("UPDATE trades SET ts_ms = ? WHERE mint = ?").run(Date.now() - 31 * 60_000, "RUGZ_mint");
+    const lines3 = await scalperFor(db, new LadderFeed([CAND])).tick();
+    expect(lines3.some((l) => l.includes("pause des entrées"))).toBe(false);
+    expect(listTrades(db, {}).some((t) => t.side === "buy" && t.symbol === "MAX")).toBe(true);
+  });
+
+  it("v11.2 humeur: réalisé(2h) ≤ −8$ sans rug → pause quand même (dégradation lente)", async () => {
     const { insertTrade } = await import("../../src/state/trades.js");
     insertTrade(db, {
-      tsMs: Date.now() - 120_000, mode: "paper", strategy: "maxscalp", mint: "RUGZ_mint", symbol: "RUGZ",
-      side: "sell", spendUsd: 2.4, qty: 0.9, priceUsd: 0.0027, status: "simulated", realizedPnlUsd: -6.1,
-      reason: "rug exit (test)-HUMEUR",
+      tsMs: Date.now() - 300_000, mode: "paper", strategy: "maxscalp", mint: "IDLE_mint", symbol: "IDLE",
+      side: "sell", spendUsd: 3, qty: 1, priceUsd: 0.01, status: "simulated", realizedPnlUsd: -8.5,
+      reason: "idle exit (test)",
     });
-    const s1 = scalperFor(db, new LadderFeed([CAND]));
-    const lines1 = await s1.tick();
-    expect(listTrades(db, {}).filter((t) => t.side === "buy" && t.symbol === "MAX")).toHaveLength(0);   // pause
+    const lines1 = await scalperFor(db, new LadderFeed([CAND])).tick();
     expect(lines1.some((l) => l.includes("pause des entrées"))).toBe(true);
-    // la même pause ne bloque pas éternellement: backdate le sell de −6.1$ à −3h → fenêtre 1h vide → entrées OK
-    db.prepare("UPDATE trades SET ts_ms = ? WHERE mint = ?").run(Date.now() - 3 * 3_600_000, "RUGZ_mint");
-    const lines2 = await scalperFor(db, new LadderFeed([CAND])).tick();
-    expect(listTrades(db, {}).some((t) => t.side === "buy" && t.symbol === "MAX")).toBe(true);
-    expect(lines2.some((l) => l.includes("pause des entrées"))).toBe(false);
+    expect(listTrades(db, {}).filter((t) => t.side === "buy" && t.symbol === "MAX")).toHaveLength(0);
   });
 
   it("sweep v11: une moon flottante NON réalisée (mark ×1.3, sous le kickoff) ne fait PAS sweeper — run 7: 160$ sur des NAV plâtrés", async () => {

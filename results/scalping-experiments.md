@@ -263,6 +263,15 @@ Base vierge (100$, 0 position), deux garde-fous de vérité :
 - **Instrumentation** : raison d'achat taguée `maxscalp entry (loterie, turbo|base)` → les bilans par bande d'entrée live (50-100k vs ≥100k) débloquent le sizing du prochain run.
 -POSITION: relance du run 8 avec v11.1 (même DB, 200$).
 
+### v11.2 — bande turbo seule + humeur à verrou (après bilan 16h run 8)
+
+- **Run 8 à 16h26: NAV 155.78 (−22.1%)**. La perte est TOUTE réalisée, concentrée sur **19:25-23:00** (−43$): **11 rug exits (rotate) en une heure (21:49-22:20) = −45.13$**, tous dans la bande **50-100k** (base). Récap par raison: rug rotate 17× **−61.13$**, idle 20× −3.15; face: takes +7.97, **moon stop 5× +7.67 (reserré 0.35 = bien)**, recycle +6.23. La bande 50-100k est le même cercle qui tuait la 30-50k au run 7, avec 24h de décalage.
+- **Le ≥100k (turbo) reste vierge**: 12 lots, 0 rug sur le run. STREAM-like.
+- **v11.1 leçon processus**: la pause humeur (fenêtre 1h) retombait dès l'essuie-glace et réarmait pendant les ruggers (« reprise à minuit au milieu du déluge »).
+- **v11.2 = bande turbo seule**: `minVol5mUsd 50k → 100k` — on ne joue plus que l'endroit où tuent les moons (loterie STREAM-like). La bande base (50-100k) redevient l'expériment d'un FUTURE run si turbo-seule survit 48h.
+- **Humeur à verrou**: réalisé net **(2h)** ≤ −8$ OU **série de ruggers (≥3 sur 2h) avec moins de 30 min depuis le dernier** → pause des entrées (sorties continuent). Un rug isolé ne ferme PAS l'offre (rug frais −0.5$ → entrées OK), une série si. Le verrou tient même quand la fenêtre PnL s'élide.
+- Tests: seuil 100k (99k refusé / 100k accepté), latch (isolé OK, série pause, verrou tient, écoulé → reprise), dégradation lente sans rug (−8.5 → pause).
+
 ---
 
 ## Leçons générales (running notes)
