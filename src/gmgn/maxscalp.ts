@@ -508,12 +508,20 @@ export class MaxScalper {
       if (c.priceUsd > 0) {tickRows.set(c.mint, { ts: now, mint: c.mint, price: c.priceUsd, liquidity: c.liquidityUsd, volumeDelta: c.vol5mUsd, src: "discovery" });}
     }
     // positions ouvertes: garder un mark courant même si le token a tourné hors de la discovery.
-    // 1) hop du cache feed (gratuit); 2) feu tournant OHLCV (markPositionsPerTick positions les plus anciennes)
+    // BUG v12 (P&L figés à −friction partout): le hop ecrivait un tick horodaté "now" à CHAQUE tick
+    // même quand le cache snapshot n'avait JAMAIS revalué depuis le buy → le lot paraissait
+    // "frais" en boucle et le feu tournant OHLCV (rotateMarks) ne se déclenchait jamais
+    // (0 candle tick). v12.1: le hop HÉRITE le ts du dernier tick réel (dès que prix Identique,
+    // la fraîcheur expire → rotation repricing via latestCandle).
     for (const p of listPositions(this.db, true)) {
       const mark = this.feed.snapshotPrice(p.mint);
       if (mark && mark > 0) {
         const prev = tickRows.get(p.mint);
-        if (!prev || prev.price !== mark) {tickRows.set(p.mint, { ts: now, mint: p.mint, price: mark, liquidity: null, volumeDelta: null, src: "discovery" });}
+        if (!prev || prev.price !== mark) {
+          const lastRow = latestTickAnyAge(this.db, p.mint);
+          const ts = lastRow?.tsMs ?? now;
+          tickRows.set(p.mint, { ts, mint: p.mint, price: mark, liquidity: null, volumeDelta: null, src: "discovery" });
+        }
       }
     }
     await this.rotateMarks(tickRows, now);

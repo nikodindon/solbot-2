@@ -354,6 +354,24 @@ describe("MaxScalper v3 — sweep USDT + recycle cash", () => {
     expect(listTrades(db, {}).some((t) => t.side === "buy")).toBe(true);
   });
 
+  it("v12.1 P&L figés: le hop cache n'est pas 'frais' à l'infini — le feu tournant OHLCV re-price via latestCandle", async () => {
+    const now = Date.now();
+    addLot(db, "FRZ_mint", "FRZ", 5, 0.01, now - 20 * 60_000);
+    // dernier vrai tick: 30 min (le lot a tourné hors discovery depuis)
+    db.prepare("INSERT INTO price_ticks (ts_ms, mint, price_usd, src) VALUES (?,?,?,?)").run(now - 30 * 60_000, "FRZ_mint", 0.01, "discovery");
+    // cache snapshot figé au prix d'entrée; la candle OHLCV répond avec le VRAI prix
+    const feed: DiscoveryFeed = {
+      name: "stub",
+      refresh: async () => [],
+      latestCandle: async () => ({ ts: Math.floor(now / 1000), open: 0.01, high: 0.0155, low: 0.0098, close: 0.015, volumeUsd: 900 }),
+      snapshotPrice: () => 0.01,
+    };
+    await scalperFor(db, feed, {}).tick();
+    // la candle est devenue le mark (fin du mark figé à l'entrée)
+    const t = db.prepare("SELECT price_usd FROM price_ticks WHERE mint = ? AND src = 'candle' ORDER BY ts_ms DESC LIMIT 1").get("FRZ_mint") as { price_usd: number } | undefined;
+    expect(t?.price_usd).toBe(0.015);
+  });
+
   it("sweep v11: une moon flottante NON réalisée (mark ×1.3, sous le kickoff) ne fait PAS sweeper — run 7: 160$ sur des NAV plâtrés", async () => {
     const s = scalperFor(db, new LadderFeed([], 0), { sweepTriggerUsd: 100.05, sweepUsd: 2 });
     addLot(db, "FLOAT_mint", "FLOAT", 96, 0.01, Date.now() - 60_000);
