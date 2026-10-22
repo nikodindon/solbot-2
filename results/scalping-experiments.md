@@ -263,6 +263,14 @@ Base vierge (100$, 0 position), deux garde-fous de vérité :
 - **Instrumentation** : raison d'achat taguée `maxscalp entry (loterie, turbo|base)` → les bilans par bande d'entrée live (50-100k vs ≥100k) débloquent le sizing du prochain run.
 -POSITION: relance du run 8 avec v11.1 (même DB, 200$).
 
+### v12 — bilan final run 8 + fenêtre de session
+
+**Run 8 final (NAV 200 → 129.31, −35%)**: réalisé −66.83. Tueur identique, DEUX vagues rug: soir 21-22h (16 rugs) ET matin 9-10h (10 rugs). Mais les moteurs ont performé: moon stop 7× +13.63, recycle 9× +12.59, takes 13× +9.43. Turbo band: 4 rugs le matin (−8.09 net) → **les vagues sont de l'HEURE, pas de la bande**: turbo-only v11.2 a quand même mangé la vague matinale. Le latch v11.2 a bien tenu (272 recs pause, 1 seul achat sur les 12 dernières heures).
+
+**Bilan cross-runs (2 921 trades)**: rug exit = 77% des pertes (−244$ / 131). Le taux de rug par HEURE D'ENTRÉE (1 002 lots classés): 12-16h = 0-3%, 19-21h = **25-33%**. Les gains tombent 9h-16h. Les vagues répondent à l'heure du jour.
+
+**v12 = fenêtre de session**: `entryBanStartHour 18 / entryBanEndHour 23` (local) — ZÉRO nouvelle entrée dans la fenêtre, sorties/churn/moon/sweep continuent. La plus grande économie identifiée (~50$ sur les runs passés). Latch 30→60 min (la vague matinale dure plus que 30 min). Prochaine validation: survie du run 9 sur 48h sans vague evening.
+
 ### v11.2 — bande turbo seule + humeur à verrou (après bilan 16h run 8)
 
 - **Run 8 à 16h26: NAV 155.78 (−22.1%)**. La perte est TOUTE réalisée, concentrée sur **19:25-23:00** (−43$): **11 rug exits (rotate) en une heure (21:49-22:20) = −45.13$**, tous dans la bande **50-100k** (base). Récap par raison: rug rotate 17× **−61.13$**, idle 20× −3.15; face: takes +7.97, **moon stop 5× +7.67 (reserré 0.35 = bien)**, recycle +6.23. La bande 50-100k est le même cercle qui tuait la 30-50k au run 7, avec 24h de décalage.

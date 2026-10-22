@@ -39,6 +39,9 @@ export interface MaxScalpConfig {
   badDayRealizedUsd: number;
   badDayLatchMin: number;
   badDayRugCount: number;
+  /** v12 fenêtre de session: heure locale incluse / exclue d'entrées (1002 lots classés: 19-21h = 25-33% rug, 12-16h = 0-3%; vague du soir 21-22h récurrente). Sorties toujours permises. */
+  entryBanStartHour: number;
+  entryBanEndHour: number;
   /** ensuite: % du sol prélevé à chaque nouveau ×2 */
   ladderTakePct: number;
   minLiquidityUsd: number;
@@ -97,8 +100,10 @@ export function maxscalpDefaults(initialUsd = 500): MaxScalpConfig {
     kickoffTakeX: 1.4,
     kickoffTakePct: 0.25,
     badDayRealizedUsd: -8,
-    badDayLatchMin: 30,
+    badDayLatchMin: 60,
     badDayRugCount: 3,
+    entryBanStartHour: 18,
+    entryBanEndHour: 23,
     ladderTakePct: 0.2,
     minLiquidityUsd: 5_000,
     /** v11.2: bande turbo seule — le 50-100k a ruggé en bande à chaque fin de journée (run 7: 27 rugs −86$, run 8: 17 rugs −61$); le ≥100k: 0 rug sur 2 runs */
@@ -601,6 +606,22 @@ export class MaxScalper {
     }
 
     // === 3) entrées sur tout candidat — v11.2: bande turbo seule (100k$) ===
+    // v12 fenêtre de session: PAS de nouvelles entrées pendant la fenêtre de session (18h-23h local
+    // par défaut). Le bilan 1002 lots classés: entrées 19-21h = 25-33% de ruggers, 12-16h = 0-3%;
+    // les vagues rug (9-10h, 21-22h) répondent à l'HEURE, pas à la bande (4 rugs turbo le matin, run 8
+    // turbo-only v11.2). Les sorties / churn / moon stops / sweep continuent toujours.
+    const localHour = new Date(now).getHours();
+    // start === end → fenêtre désactivée (défaut des tests)
+    const inBan =
+      this.cfg.entryBanStartHour === this.cfg.entryBanEndHour
+        ? false
+        : this.cfg.entryBanStartHour <= this.cfg.entryBanEndHour
+          ? localHour >= this.cfg.entryBanStartHour && localHour < this.cfg.entryBanEndHour
+          : localHour >= this.cfg.entryBanStartHour || localHour < this.cfg.entryBanEndHour;
+    if (inBan) {
+      this.rec("info", `SESSION: ${localHour}h dans fenêtre bannie [${this.cfg.entryBanStartHour}h-${this.cfg.entryBanEndHour}h) → pas d'entrées (sorties continuent)`);
+      step(`SESSION: fenêtre bannie ${this.cfg.entryBanStartHour}-${this.cfg.entryBanEndHour}h → pas d'entrées, sorties continuent`);
+    }
     // v11.2 humeur à verrou: réalisé net (2h) ≤ badDayRealizedUsd OU un rug exit de < badDayLatchMin
     // → PAUSE des entrées (les sorties/churn continuent). v11.1 leçon (run 8): la fenêtre 1h se vide
     // dès la fin du déluge et les entrées reprenaient à minuit pendant que la bande convalescente
@@ -617,8 +638,8 @@ export class MaxScalper {
     const rugMinAgo = lastRug.t ? (now - lastRug.t) / 60_000 : Number.POSITIVE_INFINITY;
     // verrou: une SÉRIE de ruggers (≥ badDayRugCount sur 2h) dont le dernier < badDayLatchMin — un rug isolé ne ferme pas l'offre
     const latchOk = !(rugCount2h.n >= this.cfg.badDayRugCount && rugMinAgo <= this.cfg.badDayLatchMin);
-    const moodOk = latchOk && moodRow.r > this.cfg.badDayRealizedUsd;
-    if (!moodOk) {
+    const moodOk = !inBan && latchOk && moodRow.r > this.cfg.badDayRealizedUsd;
+    if (!moodOk && !inBan) {
       const pourquoi = !latchOk
         ? `série de ruggers (${rugCount2h.n}/2h) et dernier il y a ${Math.round(rugMinAgo)} min < ${this.cfg.badDayLatchMin} min → verrou`
         : `réalisé net (2h) ${moodRow.r.toFixed(2)}$ ≤ ${this.cfg.badDayRealizedUsd}$`;

@@ -39,8 +39,8 @@ const CAND: Candidate = {
 };
 
 function scalperFor(db: DB, feed: DiscoveryFeed, over: Partial<MaxScalpConfig> = {}): MaxScalper {
-  // tests: lots de 1$ (les défauts v10 sont 3$/5$), capital 100$
-  return new MaxScalper({ db, cfg: { ...maxscalpDefaults(), tradeUsd: 1, tradeUsdTurbo: 1, initialUsd: 100, ...over }, feed });
+  // tests: lots de 1$ (les défauts v10 sont 3$/5$), capital 100$; fenêtre session v12 désactivée (25===25) sauf test dédié
+  return new MaxScalper({ db, cfg: { ...maxscalpDefaults(), tradeUsd: 1, tradeUsdTurbo: 1, initialUsd: 100, entryBanStartHour: 25, entryBanEndHour: 25, ...over }, feed });
 }
 
 function freshDb(): DB {
@@ -324,8 +324,8 @@ describe("MaxScalper v3 — sweep USDT + recycle cash", () => {
     db.prepare("UPDATE trades SET realized_pnl_usd = 0.2 WHERE reason = ?").run("rug exit (test)");
     const lines2 = await scalperFor(db, new LadderFeed([CAND])).tick();
     expect(lines2.some((l) => l.includes("pause des entrées"))).toBe(true);
-    // 4) verrou écoulé (dernier rug backdaté à −31 min) → entrées reviennent
-    db.prepare("UPDATE trades SET ts_ms = ? WHERE mint = ?").run(Date.now() - 31 * 60_000, "RUGZ_mint");
+    // 4) verrou écoulé (dernier rug backdaté à −61 min > latch 60) → entrées reviennent
+    db.prepare("UPDATE trades SET ts_ms = ? WHERE mint = ?").run(Date.now() - 61 * 60_000, "RUGZ_mint");
     const lines3 = await scalperFor(db, new LadderFeed([CAND])).tick();
     expect(lines3.some((l) => l.includes("pause des entrées"))).toBe(false);
     expect(listTrades(db, {}).some((t) => t.side === "buy" && t.symbol === "MAX")).toBe(true);
@@ -341,6 +341,17 @@ describe("MaxScalper v3 — sweep USDT + recycle cash", () => {
     const lines1 = await scalperFor(db, new LadderFeed([CAND])).tick();
     expect(lines1.some((l) => l.includes("pause des entrées"))).toBe(true);
     expect(listTrades(db, {}).filter((t) => t.side === "buy" && t.symbol === "MAX")).toHaveLength(0);
+  });
+
+  it("v12 fenêtre de session: PAS d'entrées dans la fenêtre bannie (les sorties/churn continuent), reprise hors fenêtre", async () => {
+    const nowHour = new Date().getHours();
+    const lines1 = await scalperFor(db, new LadderFeed([CAND]), { entryBanStartHour: nowHour, entryBanEndHour: (nowHour + 1) % 26 }).tick();
+    expect(lines1.some((l) => l.includes("fenêtre bannie"))).toBe(true);
+    expect(listTrades(db, {}).filter((t) => t.side === "buy")).toHaveLength(0);
+    // hors fenêtre → l'entrée passe
+    const lines2 = await scalperFor(db, new LadderFeed([CAND]), { entryBanStartHour: 25 }).tick();
+    expect(lines2.some((l) => l.includes("fenêtre bannie"))).toBe(false);
+    expect(listTrades(db, {}).some((t) => t.side === "buy")).toBe(true);
   });
 
   it("sweep v11: une moon flottante NON réalisée (mark ×1.3, sous le kickoff) ne fait PAS sweeper — run 7: 160$ sur des NAV plâtrés", async () => {
