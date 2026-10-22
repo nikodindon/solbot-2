@@ -271,6 +271,13 @@ Base vierge (100$, 0 position), deux garde-fous de vérité :
 
 **v12 = fenêtre de session**: `entryBanStartHour 18 / entryBanEndHour 23` (local) — ZÉRO nouvelle entrée dans la fenêtre, sorties/churn/moon/sweep continuent. La plus grande économie identifiée (~50$ sur les runs passés). Latch 30→60 min (la vague matinale dure plus que 30 min). Prochaine validation: survie du run 9 sur 48h sans vague evening.
 
+### v12.1 — bug P&L figés à −0.123$ (marks morts)
+
+- Symptôme: TOUS les P&L dashboard figés à exactement −0.123$ = la friction d'entrée d'un lot 5$, donc marks = prix d'entrée gelé. Diagnostic DB: les ticks de mints détenus sont émis à CHAQUE tick (src discovery, hop `snapshotPrice`) mais **1 seul prix distinct en 6h** — et **0 candle tick jamais inséré**.
+- Cause: le hop écrivait un tick horodaté "now" même quand le cache snapshot n'avait jamais revalué depuis le buy → le lot paraissait "frais" à l'infini → le feu tournant OHLCV (rotateMarks, déclenché seulement si dernier tick > 2 min) ne se déclenchait JAMAIS. Le rate-limit gecko (429 → cooldown 60s, ~1-3 requêtes/min d'IP publique) aggrave la cadence de rotation.
+- Fix: le hop hérite le ts du DERNIER tick réel (la fraîcheur du cache expire dès que le prix ne bouge pas) → rotation OHLCV fire. Test: lot avec dernier tick 30 min, candle renvoie le prix réel → candle tick inséré.
+- Cadence: warmup 11/29 lots au boot, puis ~1 candle/5 min (plafond gecko public) — suffisant pour un mark vivant, ralentit les rug exits (rotate) sur tokens hors discovery.
+
 ### v11.2 — bande turbo seule + humeur à verrou (après bilan 16h run 8)
 
 - **Run 8 à 16h26: NAV 155.78 (−22.1%)**. La perte est TOUTE réalisée, concentrée sur **19:25-23:00** (−43$): **11 rug exits (rotate) en une heure (21:49-22:20) = −45.13$**, tous dans la bande **50-100k** (base). Récap par raison: rug rotate 17× **−61.13$**, idle 20× −3.15; face: takes +7.97, **moon stop 5× +7.67 (reserré 0.35 = bien)**, recycle +6.23. La bande 50-100k est le même cercle qui tuait la 30-50k au run 7, avec 24h de décalage.
