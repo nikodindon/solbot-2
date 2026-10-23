@@ -372,6 +372,19 @@ describe("MaxScalper v3 — sweep USDT + recycle cash", () => {
     expect(t?.price_usd).toBe(0.015);
   });
 
+  it("v12.2 fenêtre nocturne: entrées ouvertes SEULEMENT 8-18h (ban wrap 18→8) — verdict selon l'horloge réelle", async () => {
+    const h = new Date().getHours();
+    const banned = h >= 18 || h < 8;
+    const lines1 = await scalperFor(db, new LadderFeed([CAND]), { entryBanStartHour: 18, entryBanEndHour: 8 }).tick();
+    expect(lines1.some((l) => l.includes("fenêtre bannie"))).toBe(banned);
+    expect(listTrades(db, {}).filter((t) => t.side === "buy")).toHaveLength(banned ? 0 : 1);
+    // à tout moment: la fenêtre inversée (ban 8→18) inverse le verdict
+    const lines2 = await scalperFor(db, new LadderFeed([{ ...CAND, mint: "NIGHT_mint", symbol: "NIGHT" }]), { entryBanStartHour: 8, entryBanEndHour: 18 }).tick();
+    const banned2 = h >= 8 && h < 18;
+    expect(lines2.some((l) => l.includes("fenêtre bannie"))).toBe(banned2);
+    expect(listTrades(db, {}).some((t) => t.symbol === "NIGHT")).toBe(!banned2);
+  });
+
   it("sweep v11: une moon flottante NON réalisée (mark ×1.3, sous le kickoff) ne fait PAS sweeper — run 7: 160$ sur des NAV plâtrés", async () => {
     const s = scalperFor(db, new LadderFeed([], 0), { sweepTriggerUsd: 100.05, sweepUsd: 2 });
     addLot(db, "FLOAT_mint", "FLOAT", 96, 0.01, Date.now() - 60_000);

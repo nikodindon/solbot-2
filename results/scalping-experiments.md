@@ -278,6 +278,13 @@ Base vierge (100$, 0 position), deux garde-fous de vérité :
 - Fix: le hop hérite le ts du DERNIER tick réel (la fraîcheur du cache expire dès que le prix ne bouge pas) → rotation OHLCV fire. Test: lot avec dernier tick 30 min, candle renvoie le prix réel → candle tick inséré.
 - Cadence: warmup 11/29 lots au boot, puis ~1 candle/5 min (plafond gecko public) — suffisant pour un mark vivant, ralentit les rug exits (rotate) sur tokens hors discovery.
 
+### v12.2 — fenêtre nocturne (entrées UNIQUEMENT 8-18h)
+
+- **Run 9 bilan (26h, NAV 200 → 202.33 +1.2%)**: réalisé −21.60. Take ladder devient LE moteur (21× +17.82, kickoff ×1.4/25% encaisse continu) — mais 7 rugs −30.64 ont mangé le bénéfice: 3 en pleine nuit (1h/3h/6h, 15 lots entrés 0-6h) + 13h-17h. La vague du soir 18-23h = 0 entrée (366 recs SESSION) → la porte v12 a tenu.
+- **Susan (cycle re-buy auto-financé)**: 12 trades, net **+1.80$** (take ×2 → moon stop → re-buy). Profitable mais occupe un slot book — candidat règle anti-cycle v13.
+- **Leçon données** (1002 lots classés + run 9): les heures payées = 9-16h; les ruggers = 0-6h (nuit morte, 20%!) et 19-21h. → `entryBanEndHour 23 → 8`: **nouvelles entrées ouvertes SEULEMENT 8-18h** (ban wrap 18→8, le code wrap-around existait déjà).
+- Test à l'épreuve de l'horloge (ban 18→8 vs ban 8→18 inversé). Sweep toujours à 0 = design v11 (réalisé net négatif → capital garanti = cash 14.59 ≪ 205$).
+
 ### v11.2 — bande turbo seule + humeur à verrou (après bilan 16h run 8)
 
 - **Run 8 à 16h26: NAV 155.78 (−22.1%)**. La perte est TOUTE réalisée, concentrée sur **19:25-23:00** (−43$): **11 rug exits (rotate) en une heure (21:49-22:20) = −45.13$**, tous dans la bande **50-100k** (base). Récap par raison: rug rotate 17× **−61.13$**, idle 20× −3.15; face: takes +7.97, **moon stop 5× +7.67 (reserré 0.35 = bien)**, recycle +6.23. La bande 50-100k est le même cercle qui tuait la 30-50k au run 7, avec 24h de décalage.

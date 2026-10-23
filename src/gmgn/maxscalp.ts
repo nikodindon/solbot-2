@@ -39,7 +39,7 @@ export interface MaxScalpConfig {
   badDayRealizedUsd: number;
   badDayLatchMin: number;
   badDayRugCount: number;
-  /** v12 fenêtre de session: heure locale incluse / exclue d'entrées (1002 lots classés: 19-21h = 25-33% rug, 12-16h = 0-3%; vague du soir 21-22h récurrente). Sorties toujours permises. */
+  /** v12→v12.2 fenêtre de session: heure locale incluse / exclue. v12 (18-23h) + v12.2 (nuit 23-8h): les entrées ne sont ouvertes QUE 8-18h — historique 1002 lots: 12-16h = 0-3% rug, 19-21h = 25-33%, run 9: 15 lots nocturnes 0-6h → 3 ruggers. Sorties toujours permises. */
   entryBanStartHour: number;
   entryBanEndHour: number;
   /** ensuite: % du sol prélevé à chaque nouveau ×2 */
@@ -103,7 +103,7 @@ export function maxscalpDefaults(initialUsd = 500): MaxScalpConfig {
     badDayLatchMin: 60,
     badDayRugCount: 3,
     entryBanStartHour: 18,
-    entryBanEndHour: 23,
+    entryBanEndHour: 8,
     ladderTakePct: 0.2,
     minLiquidityUsd: 5_000,
     /** v11.2: bande turbo seule — le 50-100k a ruggé en bande à chaque fin de journée (run 7: 27 rugs −86$, run 8: 17 rugs −61$); le ≥100k: 0 rug sur 2 runs */
@@ -614,10 +614,10 @@ export class MaxScalper {
     }
 
     // === 3) entrées sur tout candidat — v11.2: bande turbo seule (100k$) ===
-    // v12 fenêtre de session: PAS de nouvelles entrées pendant la fenêtre de session (18h-23h local
-    // par défaut). Le bilan 1002 lots classés: entrées 19-21h = 25-33% de ruggers, 12-16h = 0-3%;
-    // les vagues rug (9-10h, 21-22h) répondent à l'HEURE, pas à la bande (4 rugs turbo le matin, run 8
-    // turbo-only v11.2). Les sorties / churn / moon stops / sweep continuent toujours.
+    // v12.2 fenêtre de session: nouvelles entrées UNIQUEMENT 8-18h local (ban 18→8 wrap-around, couvre
+    // la vague du soir 19-21h = 25-33% rug ET la nuit 23-8h: run 9 = 15 lots nocturnes 0-6h → 3 ruggers).
+    // Historique 1002 lots classés: 12-16h = 0-3% rug — le cœur horaire rémunérateur reste ouvert.
+    // Les sorties / churn / moon stops / sweep continuent toujours.
     const localHour = new Date(now).getHours();
     // start === end → fenêtre désactivée (défaut des tests)
     const inBan =
