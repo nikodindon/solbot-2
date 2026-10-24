@@ -159,6 +159,8 @@ type LadderMap = Record<string, LadderState>;
 export class MaxScalper {
   /** rate positions dont le mark vient d'être rafraîchi via OHLCV (feu tournant) */
   private markCursor = new Map<string, number>();
+  /** v12.3: fraîcheur du cache par CHANGEMENT de valeur — le snapshot peut renvoyer le même prix figé des heures (AGENTALPHA post-rug), pas de fiction "ageMs 0" en boucle. La fresh-set tour de discovery ne suffit pas (stubs de tests sans candidats). */
+  private markHeartbeat = new Map<string, { price: number; ts: number }>();
 
   constructor(
     private readonly deps: {
@@ -366,9 +368,17 @@ export class MaxScalper {
    * Retourne le dernier niveau légitime d'avant-jump si purge, sinon null.
    */
   private async fakePumpCheck(mint: string, openedMs: number): Promise<number | null> {
-    const rows = this.db
-      .prepare("SELECT ts_ms, price_usd, src FROM price_ticks WHERE mint = ? ORDER BY ts_ms DESC LIMIT 32")
+    const raw = this.db
+      .prepare("SELECT ts_ms, price_usd, src FROM price_ticks WHERE mint = ? ORDER BY ts_ms DESC LIMIT 128")
       .all(mint) as { ts_ms: number; price_usd: number; src: string }[];
+    // v12.3: dédup (ts croissant unique, garde la ligne la plus récente) — les re-inserts hérités
+    // comblaient la fenêtre et masquaient le régime légitime pré-jump
+    const rows: { ts_ms: number; price_usd: number; src: string }[] = [];
+    for (const r of raw) {
+      if (rows.length > 0 && rows.at(-1)!.ts_ms === r.ts_ms) {continue;}
+      rows.push(r);
+      if (rows.length >= 32) {break;}
+    }
     if (rows.length < 2) {return null;}
     const top = rows[0]!.price_usd;
     // régime légitime = la ligne la plus RÉCENTE sous top/fakePumpJump (des bougies intermédiaires
@@ -406,7 +416,14 @@ export class MaxScalper {
    */
   private priceWithAge(mint: string, fallback: number): { price: number; ageMs: number; src?: "discovery" | "candle" } {
     const snap = this.feed.snapshotPrice(mint);
-    if (snap && snap > 0) {return { price: snap, ageMs: 0, src: "discovery" };}
+    if (snap && snap > 0) {
+      // v12.3: la fraîcheur du snapshot = le moment où le prix qu'il renvoie a CHANGÉ ( heartbeat) —
+      // un cache figé depuis le buy datte comme un tick vieux du boot et remplit le rotive (délai du fake pump)
+      const hb = this.markHeartbeat.get(mint);
+      const now2 = Date.now();
+      if (!hb || hb.price !== snap) {this.markHeartbeat.set(mint, { price: snap, ts: now2 });}
+      return { price: snap, ageMs: Math.max(0, now2 - (hb?.price === snap ? hb.ts : now2)), src: "discovery" };
+    }
     const tick = latestTickAnyAge(this.db, mint);
     if (tick && tick.price > 0) {
       let price = tick.price;
@@ -520,7 +537,11 @@ export class MaxScalper {
         if (!prev || prev.price !== mark) {
           const lastRow = latestTickAnyAge(this.db, p.mint);
           const ts = lastRow?.tsMs ?? now;
-          tickRows.set(p.mint, { ts, mint: p.mint, price: mark, liquidity: null, volumeDelta: null, src: "discovery" });
+          // v12.3 dédupe: si la dernière row DB est IDENTIQUE (prix + ts), pas de re-insert —
+          // 513 dupés à ts 12:03 masquaient le régime pré-jump de fakePumpCheck (∈ sa fenêtre 32 rows)
+          if (!lastRow || lastRow.tsMs !== ts || lastRow.price !== mark) {
+            tickRows.set(p.mint, { ts, mint: p.mint, price: mark, liquidity: null, volumeDelta: null, src: "discovery" });
+          }
         }
       }
     }
