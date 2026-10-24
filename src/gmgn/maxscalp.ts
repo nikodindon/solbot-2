@@ -22,7 +22,8 @@ import { insertEquity } from "../state/equity.js";
 import { kvGetJson, kvSetJson } from "../state/kv.js";
 import { paperCashGet, paperCashSet } from "../portfolio/portfolio.js";
 import { simulateBuy, simulateSell } from "../execution/paper-broker.js";
-import { insertTicks, upsertTokenMeta, latestTickAnyAge, latestDiscoveryTick, getTokenMeta, type Tick } from "../state/market.js";
+import { insertTicks, upsertTokenMeta, latestTickAnyAge, latestDiscoveryTick, getTokenMeta, type Tick, type QuoteSrc } from "../state/market.js";
+import { SOL_MINT } from "../constants.js";
 
 type TickRowMap = Map<string, Tick>;
 import type { DiscoveryFeed, Candidate } from "./discovery.js";
@@ -81,6 +82,8 @@ export interface MaxScalpConfig {
   fakePumpHaircut: number;
   /** v12.3: âge max d'une bougie OHLCV acceptable comme mark (au-delà: pool morte, dernier prix = fiction) */
   candleFreshMaxMs: number;
+  /** v12.4: rafraîchissement batch Jupiter price v3 — 0 = désactivé (les stubs de tests restent indépendants) */
+  jupMarkMinMs: number;
   loopSec: number;
   feeBps: number;
   slippageBps: number;
@@ -137,6 +140,8 @@ export function maxscalpDefaults(initialUsd = 500): MaxScalpConfig {
     fakePumpStallMs: 15 * 60_000,
     /** v12.3: une bougie OHLCV plus âgée que ça n'est pas un marché (pool morte = la bougie est le prix pré-drain) */
     candleFreshMaxMs: 10 * 60_000,
+    /** v12.4: refresh batch Jupiter toutes les 20s (1 appel pour tous les lots + SOL, lite-api gratuit) */
+    jupMarkMinMs: 20_000,
     fakePumpHaircut: 0.5,
     loopSec: 15,
     /** v9: fee = LP pool réel (Raydium/Meteora ~25-60 bps) — l'ancien 200 bps "platform fee Jupiter" n'existe pas par défaut sur le router retail et doublait le péage de churn en fiction */
@@ -165,6 +170,9 @@ export class MaxScalper {
   private markCursor = new Map<string, number>();
   /** v12.3: fraîcheur du cache par CHANGEMENT de valeur — le snapshot peut renvoyer le même prix figé des heures (AGENTALPHA post-rug), pas de fiction "ageMs 0" en boucle. La fresh-set tour de discovery ne suffit pas (stubs de tests sans candidats). */
   private markHeartbeat = new Map<string, { price: number; ts: number }>();
+  /** v12.4 throttler du refresh Jupiter + injection de fetch (stubbable en tests) */
+  private lastJupAt = 0;
+  private jupFetch: typeof fetch | null = globalThis.fetch ?? null;
 
   constructor(
     private readonly deps: {
@@ -298,6 +306,31 @@ export class MaxScalper {
   private stopNow(): boolean {return fs.existsSync(STOP_FILE);}
 
   /** feu tournant: pour les positions dont le mark stagne > 2 min, recharge une OHLCV 1m via le feed (max N/tick). */
+  /** v12.4: marks Jupiter price v3 (lite-api, autre host, quota indépendant de gecko) — 1 appel batch
+   *  pour TOUS les lots + SOL: fin des marks aveugles quand la discovery a tourné et que l'OHLCV est 429.
+   *  Le lane d'un ruggé (AGENTALPHA) est visible en Minutes au lieu de 9h. */
+  private async jupMarks(tickRows: TickRowMap, now: number): Promise<void> {
+    if (this.cfg.jupMarkMinMs <= 0 || !this.jupFetch) {return;}
+    if (now - this.lastJupAt < this.cfg.jupMarkMinMs) {return;}
+    this.lastJupAt = now;
+    const mints = [...new Set([...listPositions(this.db, true).map((p) => p.mint), SOL_MINT])].slice(0, 50);
+    if (mints.length === 0) {return;}
+    try {
+      const res = await this.jupFetch(`https://lite-api.jup.ag/price/v3?ids=${mints.join(",")}`, { signal: AbortSignal.timeout(8_000) });
+      if (!res.ok) {return;}
+      const j = (await res.json()) as Record<string, { usdPrice?: number }>;
+      for (const [mint, v] of Object.entries(j)) {
+        const price = v.usdPrice;
+        if (typeof price === "number" && price > 0) {
+          tickRows.set(mint, { ts: now, mint, price, liquidity: null, volumeDelta: null, src: "jup" });
+        }
+      }
+      this.rec("info", `JUP MARKS: refresh batch ${mints.length} lot(s)`);
+    } catch {
+      // réseau / timeout / rate limit — le prochain tick retentera (pas critique)
+    }
+  }
+
   private async rotateMarks(tickRows: TickRowMap, now: number): Promise<void> {
     const oldestNow = listPositions(this.db, true)
       .filter((p) => {
@@ -418,7 +451,7 @@ export class MaxScalper {
    * Prix + ancienneté de sa source: snapshot discovery (frais, âge 0) → dernier tick connu en DB
    * (âge = now − ts) → fallback prix d'entrée (âge ∞ = fiction, jamais vendable).
    */
-  private priceWithAge(mint: string, fallback: number): { price: number; ageMs: number; src?: "discovery" | "candle" } {
+  private priceWithAge(mint: string, fallback: number): { price: number; ageMs: number; src?: QuoteSrc } {
     const snap = this.feed.snapshotPrice(mint);
     if (snap && snap > 0) {
       // v12.3: la fraîcheur du snapshot = le moment où le prix qu'il renvoie a CHANGÉ ( heartbeat) —
@@ -455,7 +488,7 @@ export class MaxScalper {
    *  2) clamp dur TOUTES ventes: prix > maxEntryMultiple × entry → cap (le papier ignore les
    *     gains incolores au-delà — la loterie endormie ne crée pas de cash).
    */
-  private sellPriceGuard(pos: Position, price: number, src?: "discovery" | "candle"): { price: number; note?: string } {
+  private sellPriceGuard(pos: Position, price: number, src?: QuoteSrc): { price: number; note?: string } {
     let out = price;
     let note: string | undefined;
     if (src === "candle") {
@@ -552,6 +585,7 @@ export class MaxScalper {
       }
     }
     await this.rotateMarks(tickRows, now);
+    await this.jupMarks(tickRows, now);
     insertTicks(this.db, [...tickRows.values()]);
     for (const c of cands.slice(0, 12)) {
       upsertTokenMeta(this.db, { mint: c.mint, symbol: c.symbol, decimals: 6, isVerified: null, liquidityUsd: c.liquidityUsd, poolCreatedMs: c.createdMs || null }, now);
@@ -824,7 +858,7 @@ export class MaxScalper {
     takePct: number,
     _st: LadderState,
     reason?: string,
-    opts: { ageMs?: number; allowStale?: boolean; src?: "discovery" | "candle" } = {},
+    opts: { ageMs?: number; allowStale?: boolean; src?: QuoteSrc } = {},
   ): boolean {
     const sellQty = pos.qty * takePct;
     const freshLimit = this.cfg.sellMarkFreshS * 1_000;

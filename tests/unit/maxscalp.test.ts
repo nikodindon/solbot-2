@@ -385,6 +385,42 @@ describe("MaxScalper v3 — sweep USDT + recycle cash", () => {
     expect(listTrades(db, {}).some((t) => t.symbol === "NIGHT")).toBe(!banned2);
   });
 
+  it("v12.4 marks Jupiter: 1 appel batch insère les quotes de tous les lots (src jup), erreur réseau non fatale", async () => {
+    const now = Date.now();
+    addLot(db, "JM1_mint", "JM1", 5, 0.01, now - 30 * 60_000);
+    addLot(db, "JM2_mint", "JM2", 5, 0.02, now - 30 * 60_000);
+    const calls: string[] = [];
+    const realFetch = globalThis.fetch;
+    globalThis.fetch = (async (url: string | URL | Request) => {
+      calls.push(String(url instanceof Request ? url.url : url));
+      if (String(url).includes("/price/v3")) {
+        return new Response(JSON.stringify({
+          JM1_mint: { usdPrice: 0.012, blockId: 1 },
+          JM2_mint: { usdPrice: 0.019, blockId: 1 },
+        }), { status: 200 });
+      }
+      throw new Error("network");
+    }) as typeof fetch;
+    try {
+      await scalperFor(db, new LadderFeed([]), { jupMarkMinMs: 1_000 }).tick();
+    } finally {
+      globalThis.fetch = realFetch;
+    }
+    expect(calls.filter((u) => u.includes("lite-api.jup.ag/price/v3")).length).toBe(1);
+    const m1 = db.prepare("SELECT price_usd FROM price_ticks WHERE mint='JM1_mint' AND src='jup'").get() as { price_usd: number } | undefined;
+    expect(m1?.price_usd).toBeCloseTo(0.012, 6);
+    // erreur réseau au retry suivant → pas de crash, pas de tick
+    const t2 = db.prepare("SELECT price_usd FROM price_ticks WHERE mint='JM2_mint' AND src='jup'").get() as { price_usd: number } | undefined;
+    expect(t2?.price_usd).toBeCloseTo(0.019, 6);
+    globalThis.fetch = (async () => {throw new Error("boom");}) as typeof fetch;
+    try {
+      const lines = await scalperFor(db, new LadderFeed([]), { jupMarkMinMs: 1_000 }).tick();
+      expect(lines.filter((l) => l.includes("JUP MARKS")).length).toBeLessThanOrEqual(1);
+    } finally {
+      globalThis.fetch = realFetch;
+    }
+  });
+
   it("v12.3 warmup: la dernière bougie HISTORIQUE d'une pool morte n'est pas un marché (AGENTALPHA: 0.00967 pré-drain re-légitimé par repriceAll)", async () => {
     const now = Date.now();
     addLot(db, "AGM_mint", "AGM", 5, 0.01, now - 9 * 3_600_000);

@@ -7,9 +7,12 @@ export interface Tick {
   price: number;
   liquidity: number | null;
   volumeDelta: number | null;
-  /** origine du prix: découverte (fair quotes) ou ►chandelle OHLCV pool (peut être une mule pumpée) */
-  src?: "discovery" | "candle";
+  /** origine du prix: découverte (fair quotes), bougie OHLCV pool (peut être une mule pumpée) ou quote Jupiter (independence de quota) */
+  src?: QuoteSrc;
 }
+
+/** v12.4: quote Jupiter price v3 = source de mark indépendante de gecko (1 appel batch pour tous les lots) */
+export type QuoteSrc = "discovery" | "candle" | "jup";
 
 export interface Candle {
   ts: number;
@@ -99,11 +102,11 @@ export function latestDiscoveryTick(db: DB, mint: string): { tsMs: number; price
 }
 
 
-export function latestTickAnyAge(db: DB, mint: string): { tsMs: number; price: number; src?: "discovery" | "candle" } | null {
+export function latestTickAnyAge(db: DB, mint: string): { tsMs: number; price: number; src?: QuoteSrc } | null {
   const row = db
     .prepare("SELECT ts_ms, price_usd, src FROM price_ticks WHERE mint = ? ORDER BY ts_ms DESC LIMIT 1")
     .get(mint) as { ts_ms: number; price_usd: number; src: string } | undefined;
-  return row ? { tsMs: row.ts_ms, price: row.price_usd, src: row.src === "candle" ? "candle" : "discovery" } : null;
+  return row ? { tsMs: row.ts_ms, price: row.price_usd, src: row.src === "candle" ? "candle" : row.src === "jup" ? "jup" : "discovery" } : null;
 }
 
 /** Last tick per mint (latest ts). */

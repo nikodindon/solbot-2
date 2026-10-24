@@ -285,6 +285,14 @@ Base vierge (100$, 0 position), deux garde-fous de vérité :
 - **Leçon données** (1002 lots classés + run 9): les heures payées = 9-16h; les ruggers = 0-6h (nuit morte, 20%!) et 19-21h. → `entryBanEndHour 23 → 8`: **nouvelles entrées ouvertes SEULEMENT 8-18h** (ban wrap 18→8, le code wrap-around existait déjà).
 - Test à l'épreuve de l'horloge (ban 18→8 vs ban 8→18 inversé). Sweep toujours à 0 = design v11 (réalisé net négatif → capital garanti = cash 14.59 ≪ 205$).
 
+### v12.3 + v12.4 — le ruggé invisible (AGENTALPHA ×92) et la fin des marks aveugles
+
+- **L'incident**: AGENTALPHA lot 2.98$ affichait +273$ flottant pendant 9h post-rug. Le raid réel était visible sur Jupiter (liquidity 0.0005$, Pc24h −100%, le pool vidé ~13h) mais: (1) le cache gecko snapshot renvoyait le prix pré-rug avec `ageMs 0` en dur → ladder aveugle (moon stop jamais atteint car value "276$" > threshold basé sur le même mark fictif); (2) le hop réinsérait la même row (ts hérité) à chaque tick → 513 dupes qui masquaient le régime légitime pré-jump dans la fenêtre 32 rows de `fakePumpCheck`; (3) repriceAll/rotate réinséraient la DERNIÈRE bougie historique de la pool morte (prix pré-drain, bougie 8h) comme mark "now".
+- **v12.3**: heartbeat du cache par changement de valeur (un cache figé date réellement); dédup du hop + dédup de fakePumpCheck; `candleFreshMaxMs 10 min` — une bougie vieille n'est pas un marché.
+- **Effet**: la purge fake pump v10.2 a ENFIN tiré: AGENTALXA purge au régime légitime ×haircut → réalisé total du token +68.86$ papier (le monde réel: pool = 0; le papier valorise au dernier niveau "légitime" documenté v10.2).
+- **v12.4 (le vrai fix structurel)**: `jupMarks()` — quote **Jupiter price v3 lite-api** (autre host, quota indépendant de gecko): 1 appel batch pour TOUS les lots + SOL, latence du ruggé = 1 tick (~15s) au lieu de 9h. Ticks `src: "jup"`, type `QuoteSrc` partagé, throttle `jupMarkMinMs 20s`, fetch injectable (tests stub `globalThis.fetch`).
+- Leçon: chaque couche qui "t dating now" un prix sans prouver sa fraîcheur est une fiction potentielle; une source de quotes indépendante batchée > N sources mono-lot rate-limitées qui s'écrasent mutuellement.
+
 ### v11.2 — bande turbo seule + humeur à verrou (après bilan 16h run 8)
 
 - **Run 8 à 16h26: NAV 155.78 (−22.1%)**. La perte est TOUTE réalisée, concentrée sur **19:25-23:00** (−43$): **11 rug exits (rotate) en une heure (21:49-22:20) = −45.13$**, tous dans la bande **50-100k** (base). Récap par raison: rug rotate 17× **−61.13$**, idle 20× −3.15; face: takes +7.97, **moon stop 5× +7.67 (reserré 0.35 = bien)**, recycle +6.23. La bande 50-100k est le même cercle qui tuait la 30-50k au run 7, avec 24h de décalage.
