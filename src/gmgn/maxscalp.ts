@@ -79,6 +79,8 @@ export interface MaxScalpConfig {
   fakePumpJump: number;
   fakePumpStallMs: number;
   fakePumpHaircut: number;
+  /** v12.3: âge max d'une bougie OHLCV acceptable comme mark (au-delà: pool morte, dernier prix = fiction) */
+  candleFreshMaxMs: number;
   loopSec: number;
   feeBps: number;
   slippageBps: number;
@@ -133,6 +135,8 @@ export function maxscalpDefaults(initialUsd = 500): MaxScalpConfig {
     /** v10.2 fake pump (STREAM): discovery ×4+ en un tick sans bougie puis gelé 15 min = pool relancée → purge au niveau légitime × fakePumpHaircut */
     fakePumpJump: 4,
     fakePumpStallMs: 15 * 60_000,
+    /** v12.3: une bougie OHLCV plus âgée que ça n'est pas un marché (pool morte = la bougie est le prix pré-drain) */
+    candleFreshMaxMs: 10 * 60_000,
     fakePumpHaircut: 0.5,
     loopSec: 15,
     /** v9: fee = LP pool réel (Raydium/Meteora ~25-60 bps) — l'ancien 200 bps "platform fee Jupiter" n'existe pas par défaut sur le router retail et doublait le péage de churn en fiction */
@@ -306,7 +310,7 @@ export class MaxScalper {
     for (const p of oldestNow) {
       try {
         const bar = await this.feed.latestCandle(p.mint);
-        if (bar && bar.close > 0) {
+        if (bar && bar.close > 0 && now - bar.ts * 1_000 <= this.cfg.candleFreshMaxMs) {
           tickRows.set(p.mint, { ts: now, mint: p.mint, price: bar.close, liquidity: null, volumeDelta: bar.volumeUsd, src: "candle" });
           const ladder = this.ladder();
           const st = ladder[p.mint];
@@ -476,7 +480,9 @@ export class MaxScalper {
     for (const p of listPositions(this.db, true)) {
       try {
         const bar = await this.feed.latestCandle(p.mint);
-        if (bar && bar.close > 0) {
+        // v12.3: une bougie VIEILLE n'est pas un marché (pool morte: la "dernière bougie" est le
+        // prix pré-drain, AGENTALPHA) — ni repriceAll ni rotate ne re-légitiment la fiction
+        if (bar && bar.close > 0 && now - bar.ts * 1_000 <= this.cfg.candleFreshMaxMs) {
           rows.push({ ts: now, mint: p.mint, price: bar.close, liquidity: null, volumeDelta: bar.volumeUsd ?? null, src: "candle" });
           this.markCursor.set(p.mint, now);
         }

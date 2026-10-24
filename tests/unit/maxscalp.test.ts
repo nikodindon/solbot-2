@@ -385,6 +385,25 @@ describe("MaxScalper v3 — sweep USDT + recycle cash", () => {
     expect(listTrades(db, {}).some((t) => t.symbol === "NIGHT")).toBe(!banned2);
   });
 
+  it("v12.3 warmup: la dernière bougie HISTORIQUE d'une pool morte n'est pas un marché (AGENTALPHA: 0.00967 pré-drain re-légitimé par repriceAll)", async () => {
+    const now = Date.now();
+    addLot(db, "AGM_mint", "AGM", 5, 0.01, now - 9 * 3_600_000);
+    // tick discovery frais (100% saut pré-pump déjà figé)
+    db.prepare("INSERT INTO price_ticks (ts_ms, mint, price_usd, src) VALUES (?,?,?,?)").run(now - 8 * 3_600_000, "AGM_mint", 0.0097, "discovery");
+    // le feed renvoie la "dernière bougie" DE LA POOL MORTE: close = fiction, MAIS ts de la bougie = 8h
+    const feed: DiscoveryFeed = {
+      name: "stub",
+      refresh: async () => [],
+      latestCandle: async () => ({ ts: Math.floor((now - 8 * 3_600_000) / 1000), open: 0.0097, high: 0.01, low: 0.0096, close: 0.0097, volumeUsd: 1 }),
+      snapshotPrice: () => null,
+    };
+    const lines = await scalperFor(db, feed, {}).tick();
+    // pas de candle tick inséré (la bougie morte est refusée)
+    const t = db.prepare("SELECT price_usd FROM price_ticks WHERE mint = ? AND src = 'candle'").get("AGM_mint");
+    expect(t).toBeUndefined();
+    void lines;
+  });
+
   it("sweep v11: une moon flottante NON réalisée (mark ×1.3, sous le kickoff) ne fait PAS sweeper — run 7: 160$ sur des NAV plâtrés", async () => {
     const s = scalperFor(db, new LadderFeed([], 0), { sweepTriggerUsd: 100.05, sweepUsd: 2 });
     addLot(db, "FLOAT_mint", "FLOAT", 96, 0.01, Date.now() - 60_000);
