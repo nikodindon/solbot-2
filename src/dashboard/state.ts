@@ -89,7 +89,9 @@ export function buildState(db: DB, cfg: AppConfig, mode: DashMode, nowMs = Date.
   const snap = buildSnapshot(db, prices, {
     mode,
     paperCashUsdc: paperCashGet(db, cfg.paper_initial_usdc),
-    paperSol: paperSolGet(db, cfg.paper_initial_sol),
+    // v12.4: mode maxscalp le portefeuille SOL gas est vestigial (le scalpeur ne le touche jamais)
+    // → NAV affichée = cash + positions SEUL, alignée sur l'equity du moteur (sinon +50$/0.5 SOL constant et reset "pourri")
+    paperSol: mode === "maxscalp" ? 0 : paperSolGet(db, cfg.paper_initial_sol),
     balances: null,
     solPrice: prices.get(SOL_MINT) ?? 0,
     usdcPrice: prices.get(USDC_MINT) || 1,
